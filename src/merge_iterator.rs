@@ -10,53 +10,42 @@ Also assume that there's no duplicates inside a single iterator
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
-use std::fmt;
 
 use bytes::Bytes;
 
 use crate::comparator::KeyComparator;
 use crate::entry::Entry;
 
-pub struct MergeIterator<'a, T: Iterator<Item = Entry>> {
-    iterators: Vec<T>,
-    heap: BinaryHeap<HeapElem<'a>>,
-    comparator: &'a dyn KeyComparator<Bytes>
+pub struct MergeIterator<'a, Item, Iter: Iterator<Item = Item>> {
+    iterators: Vec<Iter>,
+    heap: BinaryHeap<HeapElem<'a, Item>>,
+    comparator: &'a dyn KeyComparator<Item>
 }
 
-#[derive(Clone)]
-struct HeapElem<'a> {
-    entry: Entry,
-    comparator: &'a dyn KeyComparator<Bytes>,
+struct HeapElem<'a, T> {
+    entry: T,
+    comparator: &'a dyn KeyComparator<T>,
     iterator_index: usize,
 }
 
-impl<'a> fmt::Debug for HeapElem<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("HeapElem")
-            .field("entry", &self.entry)
-            .field("iterator_index", &self.iterator_index)
-            .finish()
-    }
-}
-
-impl<'a> PartialEq<Self> for HeapElem<'a> {
+impl<'a, T> PartialEq<Self> for HeapElem<'a, T> {
     fn eq(&self, other: &Self) -> bool {
         return self.iterator_index == other.iterator_index &&
-            self.comparator.compare(&self.entry.key, &other.entry.key).is_eq();
+            self.comparator.compare(&self.entry, &other.entry).is_eq();
     }
 }
 
-impl<'a> Eq for HeapElem<'a> {}
+impl<'a, T> Eq for HeapElem<'a, T> {}
 
-impl<'a> PartialOrd for HeapElem<'a> {
+impl<'a, T> PartialOrd for HeapElem<'a, T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         return Some(self.cmp(other))
     }
 }
 
-impl<'a> Ord for HeapElem<'a> {
+impl<'a, T> Ord for HeapElem<'a, T> {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.comparator.compare(&self.entry.key, &other.entry.key)
+        other.comparator.compare(&self.entry, &other.entry)
             .then_with(|| {
                 self.iterator_index.cmp(&other.iterator_index)
             }).reverse()
@@ -81,8 +70,9 @@ Next:
     - when pop item, increment position of iterator at index
     - add item or skip if it is == heap.head
 */
-impl<'a, T: Iterator<Item = Entry>> MergeIterator<'a, T> {
-    pub fn new(iterators: Vec<T>, comparator: &'a dyn KeyComparator<Bytes>) -> Self {
+impl<'a, Item, Iter: Iterator<Item = Item>> MergeIterator<'a, Item, Iter> {
+    
+    pub fn new(iterators: Vec<Iter>, comparator: &'a dyn KeyComparator<Item>) -> Self {
         let mut heap = BinaryHeap::new();
         let mut iterators = iterators;
         
@@ -104,7 +94,7 @@ impl<'a, T: Iterator<Item = Entry>> MergeIterator<'a, T> {
         }
     }
 
-    fn get_next(&mut self, index: usize) -> Option<Entry> {
+    fn get_next(&mut self, index: usize) -> Option<Item> {
         if let Some(iter) = self.iterators.get_mut(index) {
             if let Some(entry) = iter.next() {
                 return Some(entry);
@@ -114,7 +104,7 @@ impl<'a, T: Iterator<Item = Entry>> MergeIterator<'a, T> {
         return None
     }
     
-    fn pop_heap(&mut self) -> Option<Entry> {
+    fn pop_heap(&mut self) -> Option<Item> {
         if let Some(heap_popped) = self.heap.pop() {
 
             // compensation
@@ -149,15 +139,15 @@ res = [0, 1]
 - when popping, need to check that item in heap is not like previous
 */
 
-impl<'a, T: Iterator<Item = Entry>> Iterator for MergeIterator<'a, T> {
-    type Item = Entry;
+impl<'a, Item, Iter: Iterator<Item = Item>> Iterator for MergeIterator<'a, Item, Iter> {
+    type Item = Item;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(first_pop) = self.pop_heap() {
             
             loop {
                 if let Some(peek) = self.heap.peek() {
-                    if self.comparator.compare(&peek.entry.key, &first_pop.key).is_eq() {
+                    if self.comparator.compare(&peek.entry, &first_pop).is_eq() {
                         let _unused = self.pop_heap();
                     } else {
                         break;
@@ -180,8 +170,8 @@ mod tests {
     use bytes::Bytes;
     use tempfile::TempDir;
 
-    use crate::comparator::{BytesI32Comparator, BytesStringUtf8Comparator};
-    use crate::entry::{Entry, META_ADD, ValObj};
+    use crate::comparator::BytesStringUtf8Comparator;
+    use crate::entry::{Entry, EntryComparator, META_ADD, ValObj};
     use crate::memtable::Memtable;
     use crate::opts::DbOptions;
     use crate::sstable::builder::Builder;
@@ -213,44 +203,6 @@ mod tests {
     }
 
     #[test]
-    fn ord_heap() {
-        let mut heap = BinaryHeap::new();
-        let comparator = BytesStringUtf8Comparator {};
-
-        let e4 = HeapElem {
-            entry: new_entry(4, 4),
-            comparator: &comparator,
-            iterator_index: 0
-        };
-        let e2 = HeapElem {
-            entry: new_entry(2, 2),
-            comparator: &comparator,
-            iterator_index: 2
-        };
-        let e3 = HeapElem {
-            entry: new_entry(3, 3),
-            comparator: &comparator,
-            iterator_index: 0
-        };
-        let e1 = HeapElem {
-            entry: new_entry(1, 1),
-            comparator: &comparator,
-            iterator_index: 5
-        };
-
-        heap.push(e4.clone());
-        heap.push(e2.clone());
-        heap.push(e3.clone());
-        heap.push(e1.clone());
-
-        assert_eq!(Some(e1), heap.pop());
-        assert_eq!(Some(e2), heap.pop());
-        assert_eq!(Some(e3), heap.pop());
-        assert_eq!(Some(e4), heap.pop());
-        assert_eq!(None, heap.pop());
-    }
-
-    #[test]
     fn single_merge_iterator() {
         let tmp_dir = TempDir::new().unwrap();
         let opts = DbOptions {
@@ -258,6 +210,7 @@ mod tests {
             ..Default::default()
         };
         let comparator = BytesStringUtf8Comparator {};
+        let entry_comparator = EntryComparator::new(&comparator);
 
         let e1 = new_entry(1, 1);
         let e3 = new_entry(3, 3);
@@ -265,7 +218,7 @@ mod tests {
         let e4 = new_entry(4, 4);
 
         let sstable = create_sstable(&tmp_dir, &opts, vec![e4.clone(), e3.clone(), e2.clone(), e1.clone()], 1);
-        let mut merge_iter = MergeIterator::new(vec![SSTableIterator::new(&sstable)], &comparator);
+        let mut merge_iter = MergeIterator::new(vec![SSTableIterator::new(&sstable)], &entry_comparator);
 
         assert_eq!(merge_iter.next(), Some(e1));
         assert_eq!(merge_iter.next(), Some(e2));
@@ -281,14 +234,15 @@ mod tests {
             block_max_size: 1000,
             ..Default::default()
         };
+        let comparator = BytesStringUtf8Comparator {};
+        let entry_comparator = EntryComparator::new(&comparator);
         let sstable1 = create_sstable(&tmp_dir, &opts,vec![], 1);
         let sstable2 = create_sstable(&tmp_dir, &opts,vec![], 2);
 
         let iter1 = SSTableIterator::new(&sstable1);
         let iter2 = SSTableIterator::new(&sstable2);
 
-        let comparator = Box::new(BytesI32Comparator {});
-        let mut merge_iter = MergeIterator::new(vec![iter1, iter2], comparator.as_ref());
+        let mut merge_iter = MergeIterator::new(vec![iter1, iter2], &entry_comparator);
 
         assert_eq!(merge_iter.next(), None);
     }
@@ -301,6 +255,7 @@ mod tests {
             ..Default::default()
         };
         let comparator = BytesStringUtf8Comparator {};
+        let entry_comparator = EntryComparator::new(&comparator);
         
         let e1 = new_entry(1, 1);
         let e2 = new_entry(2, 2);
@@ -324,7 +279,7 @@ mod tests {
         iter1 = SSTableIterator::new(&sstable1);
         iter2 = SSTableIterator::new(&sstable2);
 
-        let mut merge_iter = MergeIterator::new(vec![iter1, iter2], &comparator);
+        let mut merge_iter = MergeIterator::new(vec![iter1, iter2], &entry_comparator);
 
         assert_eq!(merge_iter.next(), Some(e1));
         assert_eq!(merge_iter.next(), Some(e2));
@@ -341,6 +296,7 @@ mod tests {
             ..Default::default()
         };
         let comparator = BytesStringUtf8Comparator {};
+        let entry_comparator = EntryComparator::new(&comparator);
         
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), META_ADD);
         let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), META_ADD);
@@ -353,7 +309,7 @@ mod tests {
         let iter1 = SSTableIterator::new(&sstable1);
         let iter2 = SSTableIterator::new(&sstable2);
 
-        let mut merge_iter = MergeIterator::new(vec![iter1, iter2], &comparator);
+        let mut merge_iter = MergeIterator::new(vec![iter1, iter2], &entry_comparator);
 
         assert_eq!(merge_iter.next(), Some(e1));
         // e2 is removed because is it from the iterator that is next in order
@@ -370,6 +326,7 @@ mod tests {
             ..Default::default()
         };
         let comparator = BytesStringUtf8Comparator {};
+        let entry_comparator = EntryComparator::new(&comparator);
         
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), META_ADD);
         let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), META_ADD);
@@ -380,7 +337,7 @@ mod tests {
         let iter1 = SSTableIterator::new(&sstable1);
         let iter2 = SSTableIterator::new(&sstable2);
 
-        let mut merge_iter = MergeIterator::new(vec![iter1, iter2], &comparator);
+        let mut merge_iter = MergeIterator::new(vec![iter1, iter2], &entry_comparator);
 
         assert_eq!(merge_iter.next(), Some(e1));
         assert_eq!(merge_iter.next(), Some(e2));
