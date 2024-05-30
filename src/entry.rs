@@ -23,9 +23,11 @@ pub const META_ADD: u8 = 1 << 1;
 
 pub const ZERO_ENTRY_SIZE: usize = 18;
 
+pub type Key = Bytes;
+
 #[derive(PartialEq, Eq, Debug, Default, Clone)]
 pub struct Entry {
-    pub key: Bytes,
+    pub key: Key,
     pub val_obj: ValObj,
 }
 
@@ -44,7 +46,7 @@ impl ValObj {
 }
 
 impl Entry {
-    pub fn new(key: Bytes, value: Bytes, meta: u8) -> Entry {
+    pub fn new(key: Key, value: Bytes, meta: u8) -> Entry {
         Entry {
             key,
             val_obj: ValObj {
@@ -64,12 +66,16 @@ impl Entry {
         self.val_obj.meta |= META_ADD;
     }
 
-    pub fn get_encoded_size(key: &Bytes, val_obj: &ValObj) -> usize {
+    pub fn get_encoded_size(key: &Key, val_obj: &ValObj) -> usize {
         return Self::get_header_size() + key.len() + val_obj.get_encoded_size();
     }
 
     pub fn get_encoded_size_entry(&self) -> usize {
         return Self::get_encoded_size(&self.key, &self.val_obj);
+    }
+    
+    pub fn to_tuple(self) -> (Key, ValObj) {
+        (self.key, self.val_obj)
     }
 
     pub fn get_header_size() -> usize {

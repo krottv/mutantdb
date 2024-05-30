@@ -40,6 +40,15 @@ impl<KEY, VALUE> Default for SkipEntry<KEY, VALUE> where
     }
 }
 
+impl<KEY, VALUE> SkipEntry<KEY, VALUE> where
+    KEY: Default,
+    VALUE: Default {
+
+    pub fn to_tuple(self) -> (KEY, VALUE) {
+        (self.key, self.value)
+    }
+}
+
 pub struct SkiplistRaw<'a, KEY, VALUE> where
     KEY: 'a + Default,
     VALUE: 'a + Default {

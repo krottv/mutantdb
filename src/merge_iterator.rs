@@ -4,7 +4,8 @@ This iterator is used for compaction process.
 It will take multiple sstables and produce always valid key next in sorted order. (like lazy merge sort).
 In this way to compact, we would only need to create new SSTables from the iterator.
 
-We assume that the first iterator has the earliest data
+We assume that the first iterator has the earliest data.
+Also assume that there's no duplicates inside a single iterator
 */
 
 use std::cmp::Ordering;
@@ -15,10 +16,9 @@ use bytes::Bytes;
 
 use crate::comparator::KeyComparator;
 use crate::entry::Entry;
-use crate::sstable::sstable_iterator::SSTableIterator;
 
-pub struct MergeIterator<'a> {
-    iterators: Vec<SSTableIterator<'a>>,
+pub struct MergeIterator<'a, T: Iterator<Item = Entry>> {
+    iterators: Vec<T>,
     heap: BinaryHeap<HeapElem<'a>>,
     comparator: &'a dyn KeyComparator<Bytes>
 }
@@ -81,8 +81,8 @@ Next:
     - when pop item, increment position of iterator at index
     - add item or skip if it is == heap.head
 */
-impl<'a> MergeIterator<'a> {
-    pub fn new(iterators: Vec<SSTableIterator<'a>>, comparator: &'a dyn KeyComparator<Bytes>) -> Self {
+impl<'a, T: Iterator<Item = Entry>> MergeIterator<'a, T> {
+    pub fn new(iterators: Vec<T>, comparator: &'a dyn KeyComparator<Bytes>) -> Self {
         let mut heap = BinaryHeap::new();
         let mut iterators = iterators;
         
@@ -91,7 +91,7 @@ impl<'a> MergeIterator<'a> {
             if let Some(entry) = iterators[i].next() {
                 heap.push(HeapElem {
                     entry,
-                    comparator, 
+                    comparator,
                     iterator_index: i
                 });
             }
@@ -149,7 +149,7 @@ res = [0, 1]
 - when popping, need to check that item in heap is not like previous
 */
 
-impl<'a> Iterator for MergeIterator<'a> {
+impl<'a, T: Iterator<Item = Entry>> Iterator for MergeIterator<'a, T> {
     type Item = Entry;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -211,7 +211,7 @@ mod tests {
             }
         }
     }
-    
+
     #[test]
     fn ord_heap() {
         let mut heap = BinaryHeap::new();
@@ -237,19 +237,19 @@ mod tests {
             comparator: &comparator,
             iterator_index: 5
         };
-        
+
         heap.push(e4.clone());
         heap.push(e2.clone());
         heap.push(e3.clone());
         heap.push(e1.clone());
-        
+
         assert_eq!(Some(e1), heap.pop());
         assert_eq!(Some(e2), heap.pop());
         assert_eq!(Some(e3), heap.pop());
         assert_eq!(Some(e4), heap.pop());
         assert_eq!(None, heap.pop());
     }
-    
+
     #[test]
     fn single_merge_iterator() {
         let tmp_dir = TempDir::new().unwrap();
@@ -312,11 +312,11 @@ mod tests {
 
         let mut iter1 = SSTableIterator::new(&sstable1);
         let mut iter2 = SSTableIterator::new(&sstable2);
-        
+
         assert_eq!(iter1.next(), Some(e1.clone()));
         assert_eq!(iter1.next(), Some(e3.clone()));
         assert_eq!(iter1.next(), None);
-        
+
         assert_eq!(iter2.next(), Some(e2.clone()));
         assert_eq!(iter2.next(), Some(e4.clone()));
         assert_eq!(iter2.next(), None);
@@ -357,7 +357,7 @@ mod tests {
 
         assert_eq!(merge_iter.next(), Some(e1));
         // e2 is removed because is it from the iterator that is next in order
-        assert_eq!(merge_iter.next(), Some(e3)); 
+        assert_eq!(merge_iter.next(), Some(e3));
         assert_eq!(merge_iter.next(), Some(e4));
         assert_eq!(merge_iter.next(), None);
     }
