@@ -1,100 +1,130 @@
 use std::cmp::max;
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::mem;
 use std::path::PathBuf;
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use prost::Message;
 
 use proto::meta::{BlockIndex, TableIndex};
 
-use crate::entry::Entry;
+use crate::entry::{Entry, ValObj};
 use crate::errors::Result;
 use crate::memtable::Memtable;
 use crate::opts::DbOptions;
 use crate::sstable::SSTable;
 
-pub struct Builder {
-    
+pub struct Builder<'a> {
+    opts: &'a DbOptions,
+    counter: u64,
+    writer: BufWriter<File>,
+    index: TableIndex,
+    block: BlockIndex,
+    block_offset: u64,
+    buffer: BytesMut,
+    max_block_size: usize,
+    file_path: PathBuf,
 }
 
-impl Builder {
-    
-    // see SSTable for the format
-    // todo: refactor to a class?
-    pub fn build<'a>(mem: Memtable, file_path: PathBuf, opts: &'a DbOptions) -> Result<SSTable<'a>> {
-        let mut memtable = mem;
-        // max block size is max of entry and opts.block_size
-        let mut max_block_size = opts.block_max_size as usize;
-        let mut all_entries_size: u64 = 0;
-        for entry in &memtable.inner.skiplist {
-            
-            let encoded_size = Entry::get_encoded_size(&entry.key, &entry.value);
-            max_block_size = max(encoded_size, max_block_size);
-            all_entries_size += encoded_size as u64;
-        }
-        
+impl<'a> Builder<'a> {
+    pub fn new(file_path: PathBuf,
+               opts: &'a DbOptions,
+               max_count: u64,
+               max_block_size: usize,
+               all_entries_size: u64,
+               max_version: u64,
+    ) -> Result<Self> {
         let mut index = TableIndex::default();
-        index.key_count = memtable.inner.skiplist.size as u64;
-        index.max_version = memtable.inner.max_version;
-        
         let file = File::options()
             .read(true)
             .write(true)
             .create(true)
-            .open(file_path.clone())?;
-        
+            .open(&file_path)?;
+
         let mut writer = BufWriter::new(file);
-        let mut buffer = BytesMut::with_capacity(max_block_size);
-        
+        let buffer = BytesMut::with_capacity(max_block_size);
+
         writer.write(&all_entries_size.to_be_bytes())?;
-        
-        let mut block = BlockIndex::default();
-        let mut block_offset: u64 = 8;
-        
-        // drain is not actually necessary
-        for (i, entry) in memtable.inner.skiplist.drain().enumerate() {
-            
-            if i == 0 {
-                block.key = entry.key.to_vec();
-                block.offset = block_offset;
 
-                index.first_key = entry.key.to_vec();
-            } else if i == (index.key_count as usize - 1) {
-                index.last_key = entry.key.to_vec();
-            }
+        index.max_version = max_version;
+        index.key_count = max_count;
 
-            // write entry
-            Entry::encode(&entry.key, &entry.value, &mut buffer);
-            let encoded_size = writer.write(&buffer)?;
-            buffer.clear();
-            
-            // add block to index
-            if block.len != 0 && (block.len as usize + encoded_size) > max_block_size {
-                
-                block_offset += block.len as u64;
-                index.blocks.push(block);
-                block = BlockIndex::default();
-                block.offset = block_offset;
-                block.key = entry.key.to_vec();
-            }
-            block.len += encoded_size as u32;
+        Ok(Builder {
+            opts,
+            counter: 0,
+            writer,
+            index,
+            block: BlockIndex::default(),
+            block_offset: 8,
+            buffer,
+            max_block_size,
+            file_path,
+        })
+    }
+
+    pub fn add_entry(&mut self, key: &Bytes, val_obj: &ValObj) -> Result<()> {
+        if self.block.offset == 0 && self.index.blocks.is_empty() {
+            self.block.key = key.to_vec();
+            self.block.offset = self.block_offset;
+
+            self.index.first_key = key.to_vec();
+        } else if self.counter == (self.index.key_count - 1) {
+            self.index.last_key = key.to_vec();
         }
-        
-        if block.len != 0 {
-            index.blocks.push(block);
+
+        // write entry
+        Entry::encode(key, val_obj, &mut self.buffer);
+        let encoded_size = self.writer.write(&self.buffer)?;
+        self.buffer.clear();
+
+        // add block to index
+        if self.block.len != 0 && (self.block.len as usize + encoded_size) > self.max_block_size {
+            self.block_offset += self.block.len as u64;
+
+            let old_val = mem::take(&mut self.block);
+            self.index.blocks.push(old_val);
+
+            self.block.offset = self.block_offset;
+            self.block.key = key.to_vec();
         }
-        let index_size = index.encoded_len();
-        writer.write(&index_size.to_be_bytes())?;
-        
-        buffer.reserve(index_size);
-        index.encode(&mut buffer)?;
-        writer.write(&buffer)?;
-        writer.flush()?;
-        
-        // todo: delete wal when saved to manifest
-        memtable.wal.delete()?;
-        
-        return SSTable::from_builder(index, file_path, opts)
+        self.block.len += encoded_size as u32;
+
+        self.counter += 1;
+
+        return Ok(());
+    }
+
+    // todo: delete wal when saved to manifest
+    pub fn build(mut self) -> Result<SSTable<'a>> {
+        if self.block.len != 0 {
+            self.index.blocks.push(self.block);
+        }
+        let index_size = self.index.encoded_len();
+        self.writer.write(&index_size.to_be_bytes())?;
+
+        self.buffer.reserve(index_size);
+        self.index.encode(&mut self.buffer)?;
+        self.writer.write(&self.buffer)?;
+        self.writer.flush()?;
+
+        return SSTable::from_builder(self.index, self.file_path, self.opts);
+    }
+
+    pub fn build_from_memtable(mem: Memtable,
+                               file_path: PathBuf,
+                               opts: &'a DbOptions, ) -> Result<SSTable<'a>> {
+        let max_block_size = max(opts.block_max_size, mem.inner.compute_max_entry_size() as u32);
+        let all_entries_size: u64 = mem.inner.cur_size;
+        let max_count = mem.inner.skiplist.size as u64;
+
+        let mut builder = Builder::new(file_path, opts, max_count, max_block_size as usize,
+                                       all_entries_size, mem.inner.max_version)?;
+
+        for entry in mem.inner.skiplist.into_iter() {
+            builder.add_entry(&entry.key, &entry.value)?
+        }
+
+        builder.build()
     }
 }

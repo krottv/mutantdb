@@ -197,7 +197,7 @@ mod tests {
         for entry in entries {
             memtable.add(entry).unwrap();
         }
-        Builder::build(memtable, sstable_path, &opts).unwrap()
+        Builder::build_from_memtable(memtable, sstable_path, &opts).unwrap()
     }
     
     fn new_entry(key: u8, value: u8) -> Entry {

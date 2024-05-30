@@ -59,7 +59,7 @@ pub struct Block {
 impl<'a> SSTable<'a> {
     pub fn from_builder(index: TableIndex, file_path: PathBuf, opts: &'a DbOptions) -> Result<SSTable<'a>> {
         unsafe {
-            let file = File::open(file_path.clone())?;
+            let file = File::open(&file_path)?;
             let mmap = Mmap::map(&file)?;
             let first_key = Bytes::copy_from_slice(&index.first_key);
             let last_key = Bytes::copy_from_slice(&index.last_key);
@@ -86,7 +86,7 @@ impl<'a> SSTable<'a> {
      number of bytes requested (the buffer size) or return an error.
      */
     pub fn open(file_path: PathBuf, opts: &'a DbOptions) -> Result<SSTable<'a>> {
-        let file = File::open(file_path.clone())?;
+        let file = File::open(&file_path)?;
         let mut reader = BufReader::new(file);
 
         // Read the first 8 bytes to get the blocks size
@@ -260,7 +260,7 @@ mod tests {
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let sstable = Builder::build(memtable, sstable_path, &opts).unwrap();
+        let sstable = Builder::build_from_memtable(memtable, sstable_path, &opts).unwrap();
         let block = sstable.get_block(&sstable.index.blocks[0]);
 
         assert_eq!(block.entries.len(), 3);
@@ -314,7 +314,7 @@ mod tests {
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let sstable = Builder::build(memtable, sstable_path, &opts).unwrap();
+        let sstable = Builder::build_from_memtable(memtable, sstable_path, &opts).unwrap();
         
         assert_eq!(sstable.index.blocks.len(), 3);
         assert_eq!(&sstable.index.first_key, &e1.key.to_vec());
@@ -374,7 +374,7 @@ mod tests {
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let mut sstable = Builder::build(memtable, sstable_path.clone(), &opts).unwrap();
+        let mut sstable = Builder::build_from_memtable(memtable, sstable_path.clone(), &opts).unwrap();
         drop(sstable);
 
         sstable = SSTable::open(sstable_path, &opts).unwrap();

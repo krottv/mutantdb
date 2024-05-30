@@ -10,47 +10,41 @@ pub struct VecStringUtf8Comparator {}
 
 impl KeyComparator<Bytes> for BytesStringUtf8Comparator {
     fn compare(&self, compare: &Bytes, another: &Bytes) -> Ordering {
-        let compare_str_res = String::from_utf8(compare.to_vec());
-        let another_str_res = String::from_utf8(another.to_vec());
+        let compare_res = std::str::from_utf8(compare.as_ref());
+        let another_res = std::str::from_utf8(another.as_ref());
 
-        if compare_str_res.is_err() && another_str_res.is_err() {
-            return Ordering::Equal
-        } else if compare_str_res.is_err() {
-            return Ordering::Less
-        } else if another_str_res.is_err() {
-            return Ordering::Greater
+        return if compare_res.is_err() && another_res.is_err() {
+            Ordering::Equal
+        } else if compare_res.is_err() {
+            Ordering::Less
+        } else if another_res.is_err() {
+            Ordering::Greater
         } else {
-            return compare_str_res.unwrap().cmp(&another_str_res.unwrap());
+            compare_res.unwrap().cmp(&another_res.unwrap())
         }
     }
 }
-
-// impl KeyComparator<&[u8]> for BytesStringUtf8Comparator {
-//     fn compare(&self, compare: &[u8], another: &[u8]) -> Ordering {
-//         let compare_str_res = str::from_utf8(compare);
-//         let another_str_res = str::from_utf8(another);
-// 
-//         return if compare_str_res.is_err() && another_str_res.is_err() {
-//             Ordering::Equal
-//         } else if compare_str_res.is_err() {
-//             Ordering::Less
-//         } else if another_str_res.is_err() {
-//             Ordering::Greater
-//         } else {
-//             compare_str_res.unwrap().cmp(&another_str_res.unwrap())
-//         }
-//     }
-// }
 
 pub struct BytesI32Comparator {}
 
 impl KeyComparator<Bytes> for BytesI32Comparator {
     fn compare(&self, compare: &Bytes, another: &Bytes) -> Ordering {
-        // todo: handle errors
-        let compare_i32_res = i32::from_be_bytes(compare.to_vec().try_into().unwrap());
-        let another_i32_res = i32::from_be_bytes(another.to_vec().try_into().unwrap());
+        let compare_res = compare.as_ref().try_into().map(|x| {
+            i32::from_be_bytes(x)
+        });
+        let another_res = another.as_ref().try_into().map(|x| {
+            i32::from_be_bytes(x)
+        });
 
-        compare_i32_res.cmp(&another_i32_res)
+        return if compare_res.is_err() && another_res.is_err() {
+            Ordering::Equal
+        } else if compare_res.is_err() {
+            Ordering::Less
+        } else if another_res.is_err() {
+            Ordering::Greater
+        } else {
+            compare_res.unwrap().cmp(&another_res.unwrap())
+        }
     }
 }
 

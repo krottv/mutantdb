@@ -14,7 +14,7 @@ use crate::wal::Wal;
 pub struct MemtableInner<'a> {
     pub skiplist: SkiplistRaw<'a, Bytes, ValObj>,
     pub max_version: u64,
-    pub max_size: u64,
+    pub max_memtable_size: u64,
     pub cur_size: u64,
 }
 
@@ -23,7 +23,7 @@ impl<'a> MemtableInner<'a> {
         return MemtableInner {
             skiplist: SkiplistRaw::new(opts.key_comparator.as_ref(), false),
             max_version: 0,
-            max_size: opts.max_memtable_size,
+            max_memtable_size: opts.max_memtable_size,
             cur_size: 0
         }
     }
@@ -43,6 +43,16 @@ impl<'a> MemtableInner<'a> {
         }
         self.cur_size += add_size;
         self.max_version = max(self.max_version, val_version)
+    }
+    
+    pub fn compute_max_entry_size(&self) -> usize {
+        if let Some(max) = self.skiplist.into_iter().map(|x| {
+            Entry::get_encoded_size(&x.key, &x.value)
+        }).max() {
+            max
+        } else {
+            0
+        }
     }
 }
 
