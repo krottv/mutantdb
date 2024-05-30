@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package meta;
+
+import "rustproto.proto";
+
+option (rustproto.lite_runtime_all) = true;
+
+message BlockIndex {
+  // first key of the block
+  bytes key = 1;
+  uint64 offset = 2;
+  uint32 len = 3;
+}
+
+message TableIndex {
+  repeated BlockIndex blocks = 1;
+  uint64 max_version = 2;
+  uint64 key_count = 3;
+  bytes first_key = 4;
+  bytes last_key = 5;
+}
