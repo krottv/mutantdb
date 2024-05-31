@@ -7,3 +7,6 @@ mod opts;
 mod errors;
 mod sstable;
 mod merge_iterator;
+mod levels;
+mod core;
+mod logger;

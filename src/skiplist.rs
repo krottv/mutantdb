@@ -5,15 +5,16 @@ mod skipiterator;
 mod skiplist_test;
 
 use std::cmp::Ordering;
-use crate::skiplist::coinflipper::{CoinFlipper, CoinFlipperHash};
+use crate::skiplist::coinflipper::{CoinFlipper, CoinFlipperHash, CoinFlipperRand};
 use crate::skiplist::skipnode::SkipNode;
 use crate::skiplist::skipvalue::SkipData;
 
 use std::ptr::null_mut;
+use std::sync::Arc;
 use crate::comparator::KeyComparator;
 
 type NodePtr<KEY, VALUE> = *mut SkipNode<SkipEntry<KEY, VALUE>>;
-type Comparator<'a, KEY> = &'a dyn KeyComparator<KEY>;
+type Comparator<KEY> = Arc<dyn KeyComparator<KEY>>;
 
 pub enum AddResult<KEY, VALUE> where
     KEY: Default,
@@ -43,41 +44,40 @@ impl<KEY, VALUE> Default for SkipEntry<KEY, VALUE> where
 impl<KEY, VALUE> SkipEntry<KEY, VALUE> where
     KEY: Default,
     VALUE: Default {
-
     pub fn to_tuple(self) -> (KEY, VALUE) {
         (self.key, self.value)
     }
 }
 
-pub struct SkiplistRaw<'a, KEY, VALUE> where
-    KEY: 'a + Default,
-    VALUE: 'a + Default {
+pub struct SkiplistRaw<KEY, VALUE> where
+    KEY: Default,
+    VALUE: Default {
     pub size: usize,
     pub height: usize,
     head: NodePtr<KEY, VALUE>,
     head_bottom: NodePtr<KEY, VALUE>,
     coin_flipper: Box<dyn CoinFlipper>,
-    key_comparator: Comparator<'a, KEY>,
+    key_comparator: Comparator<KEY>,
     allow_duplicates: bool,
 }
 
-impl<'a, KEY, VALUE> SkiplistRaw<'a, KEY, VALUE> where
-    KEY: 'a + Default,
-    VALUE: 'a + Default {
-    pub fn new(key_comparator: Comparator<'a, KEY>, allow_duplicates: bool) -> Self {
+impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
+    KEY: Default,
+    VALUE: Default {
+    pub fn new(key_comparator: Comparator<KEY>, allow_duplicates: bool) -> Self {
         let dummy = Box::into_raw(Box::new(SkipNode::new(SkipData::Dummy())));
         return SkiplistRaw {
             size: 0,
             height: 1,
             head: dummy,
             head_bottom: dummy,
-            coin_flipper: Box::new(CoinFlipperHash::new()),
+            coin_flipper: Box::new(CoinFlipperRand {}),
             key_comparator,
             allow_duplicates,
         };
     }
     //  1 -> 2 -> 3 -> 4 -> 5, target = 3
-    fn search_prev(&self, target: &'a KEY) -> NodePtr<KEY, VALUE> {
+    fn search_prev(&self, target: &KEY) -> NodePtr<KEY, VALUE> {
         unsafe {
             let mut cur = self.head;
 
@@ -105,7 +105,7 @@ impl<'a, KEY, VALUE> SkiplistRaw<'a, KEY, VALUE> where
         return self.coin_flipper.flip();
     }
 
-    pub fn search(&self, target: &'a KEY) -> Option<&VALUE> {
+    pub fn search(&self, target: &KEY) -> Option<&VALUE> {
         unsafe {
             let prev = self.search_prev(&target);
             return if self.next_equals(prev, target) {
@@ -116,11 +116,11 @@ impl<'a, KEY, VALUE> SkiplistRaw<'a, KEY, VALUE> where
         }
     }
 
-    pub fn contains(&self, target: &'a KEY) -> bool {
+    pub fn contains(&self, target: &KEY) -> bool {
         return self.search(target).is_some();
     }
 
-    fn next_equals(&self, node: NodePtr<KEY, VALUE>, target: &'a KEY) -> bool {
+    fn next_equals(&self, node: NodePtr<KEY, VALUE>, target: &KEY) -> bool {
         unsafe {
             let found = &*node;
             return !found.next.is_null() && self.key_comparator.compare(&(&*found.next).data.get_ref().key, target) == Ordering::Equal;
@@ -263,12 +263,12 @@ impl<'a, KEY, VALUE> SkiplistRaw<'a, KEY, VALUE> where
         }
     }
 
-    pub fn erase_return(&mut self, key: &'a KEY) -> Option<Box<SkipEntry<KEY, VALUE>>> {
+    pub fn erase_return(&mut self, key: &KEY) -> Option<Box<SkipEntry<KEY, VALUE>>> {
         let found = self.search_prev(key);
         self.may_erase_if_next_eq(key, found)
     }
 
-    pub fn erase(&mut self, key: &'a KEY) -> bool {
+    pub fn erase(&mut self, key: &KEY) -> bool {
         return self.erase_return(key).is_some();
     }
 
@@ -327,7 +327,7 @@ impl<'a, KEY, VALUE> SkiplistRaw<'a, KEY, VALUE> where
         }
     }
 
-    fn may_erase_if_next_eq(&mut self, key: &'a KEY, found: NodePtr<KEY, VALUE>) -> Option<Box<SkipEntry<KEY, VALUE>>> {
+    fn may_erase_if_next_eq(&mut self, key: &KEY, found: NodePtr<KEY, VALUE>) -> Option<Box<SkipEntry<KEY, VALUE>>> {
         unsafe {
             return if self.next_equals(found, key) {
                 let nxt = (*found).next;
@@ -369,9 +369,9 @@ impl<'a, KEY, VALUE> SkiplistRaw<'a, KEY, VALUE> where
     }
 }
 
-impl<'a, KEY, VALUE> Drop for SkiplistRaw<'a, KEY, VALUE> where
-    KEY: 'a + Default,
-    VALUE: 'a + Default {
+impl<KEY, VALUE> Drop for SkiplistRaw<KEY, VALUE> where
+    KEY: Default,
+    VALUE: Default {
     fn drop(&mut self) {
         self.release_pointers();
         // release dummy nodes also

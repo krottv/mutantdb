@@ -1,14 +1,14 @@
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use crate::comparator::I32Comparator;
     use crate::skiplist::{AddResult, SkipEntry, SkiplistRaw};
     use crate::skiplist::skipiterator::{SkipDrain, SkipIterator};
 
     #[test]
     fn basic_search_erase() {
-        
-        let comparator = I32Comparator {};
-        let mut list = SkiplistRaw::new(&comparator, true);
+        let comparator = Arc::new(I32Comparator {});
+        let mut list = SkiplistRaw::new(comparator, true);
         list.add(1, 0);
         list.add(2, 0);
         list.add(3, 0);
@@ -20,9 +20,8 @@ mod tests {
 
     #[test]
     fn basic_duplicates() {
-
-        let comparator = I32Comparator {};
-        let mut list = SkiplistRaw::new(&comparator, true);
+        let comparator = Arc::new(I32Comparator {});
+        let mut list = SkiplistRaw::new(comparator, true);
         
         match list.add(1, 1) {
             AddResult::Added => {}
@@ -66,9 +65,8 @@ mod tests {
     
     #[test]
     fn basic_unique() {
-
-        let comparator = I32Comparator {};
-        let mut list = SkiplistRaw::new(&comparator, false);
+        let comparator = Arc::new(I32Comparator {});
+        let mut list = SkiplistRaw::new(comparator, false);
         match list.add(1, 0) {
             AddResult::Added => {}
             AddResult::Replaced(_) => {
@@ -122,8 +120,8 @@ mod tests {
     
     #[test]
     fn test_clear() {
-        let comparator = I32Comparator {};
-        let mut list = SkiplistRaw::new(&comparator, true);
+        let comparator = Arc::new(I32Comparator {});
+        let mut list = SkiplistRaw::new(comparator, true);
         list.add(1,0);
         list.add(2,0);
         list.add(3,0);
@@ -137,8 +135,8 @@ mod tests {
 
     #[test]
     fn test_iterator() {
-        let comparator = I32Comparator {};
-        let mut list = SkiplistRaw::new(&comparator, true);
+        let comparator = Arc::new(I32Comparator {});
+        let mut list = SkiplistRaw::new(comparator, true);
         list.add(1, 101);
         list.add(1, 102);
         list.add(1, 103);
@@ -169,8 +167,8 @@ mod tests {
 
     #[test]
     fn test_drain_iterator() {
-        let comparator = I32Comparator {};
-        let mut list = SkiplistRaw::new(&comparator, true);
+        let comparator = Arc::new(I32Comparator {});
+        let mut list = SkiplistRaw::new(comparator, true);
         list.add(1, 101);
         list.add(1, 102);
         list.add(1, 103);

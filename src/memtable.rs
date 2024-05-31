@@ -1,6 +1,7 @@
 use std::cmp::max;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use bytes::Bytes;
 
@@ -11,17 +12,17 @@ use crate::skiplist::{AddResult, SkiplistRaw};
 use crate::wal::Wal;
 
 // separate wal and skiplist so that they can be mutated independently
-pub struct MemtableInner<'a> {
-    pub skiplist: SkiplistRaw<'a, Bytes, ValObj>,
+pub struct MemtableInner {
+    pub skiplist: SkiplistRaw<Bytes, ValObj>,
     pub max_version: u64,
     pub max_memtable_size: u64,
     pub cur_size: u64,
 }
 
-impl<'a> MemtableInner<'a> {
-    pub fn new(opts: &'a DbOptions) -> MemtableInner<'a> {
+impl MemtableInner {
+    pub fn new(opts: Arc<DbOptions>) -> MemtableInner {
         return MemtableInner {
-            skiplist: SkiplistRaw::new(opts.key_comparator.as_ref(), false),
+            skiplist: SkiplistRaw::new(opts.key_comparator.clone(), false),
             max_version: 0,
             max_memtable_size: opts.max_memtable_size,
             cur_size: 0
@@ -56,17 +57,17 @@ impl<'a> MemtableInner<'a> {
     }
 }
 
-pub struct Memtable<'a> {
+pub struct Memtable {
     pub wal: Wal,
     pub id: usize,
-    pub inner: MemtableInner<'a>
+    pub inner: MemtableInner
 }
 
-impl<'a> Memtable<'a> {
+impl Memtable {
     pub fn new(id: usize,
                wal_path: PathBuf,
-               opts: &'a DbOptions) -> Result<Memtable<'a>> {
-        let wal = Wal::open(wal_path, opts)?;
+               opts: Arc<DbOptions>) -> Result<Memtable> {
+        let wal = Wal::open(wal_path, &opts)?;
         return Ok(
             Memtable {
                 wal,
@@ -100,18 +101,18 @@ impl<'a> Memtable<'a> {
     }
 }
 
-pub struct Memtables<'a> {
-    pub mutable: Memtable<'a>,
-    pub immutables: VecDeque<Memtable<'a>>,
-    pub opts: &'a DbOptions
+pub struct Memtables {
+    pub mutable: Memtable,
+    pub immutables: VecDeque<Memtable>,
+    pub opts: Arc<DbOptions>
 }
 
 const WAL_FILE_EXT: &str = ".wal";
 
-impl<'a> Memtables<'a> {
+impl Memtables {
     
     // can be extracted to WAL manager like in Rocks db, but not too much code yet here.
-    pub fn open(opts: &DbOptions) -> Result<Memtables> {
+    pub fn open(opts: Arc<DbOptions>) -> Result<Memtables> {
         std::fs::create_dir_all(&opts.wal_path)?;
         
         let wal_folder = std::fs::read_dir(&opts.wal_path)?;
@@ -124,7 +125,7 @@ impl<'a> Memtables<'a> {
                 
                 if let Ok(id) = num_name.parse() {
                     
-                    let memtable = Memtable::new(id, file.path(), opts)?;
+                    let memtable = Memtable::new(id, file.path(), opts.clone())?;
                     memtables.push_back(memtable);
                 }
             }
@@ -144,7 +145,7 @@ impl<'a> Memtables<'a> {
         if let Some(mutable_tmp) = memtables.pop_back() {
             mutable = mutable_tmp;
         } else {
-            mutable = Memtable::new(1, opts.wal_path.join(Self::id_to_name(1)), &opts)?;
+            mutable = Memtable::new(1, opts.wal_path.join(Self::id_to_name(1)), opts.clone())?;
         }
         
         return Ok(
@@ -166,30 +167,25 @@ impl<'a> Memtables<'a> {
         return self.opts.wal_path.join(next_path)
     }
 
-    pub fn get(&self, key: &'a Bytes) -> Option<&ValObj> {
+    pub fn get(&self, key: &Bytes) -> Option<&ValObj> {
         for memtable in MemtablesViewIterator::new(self) {
-            match memtable.inner.skiplist.search(key) {
-                None => {}
-                Some(val_obj) => {
-                    return Some(val_obj)
-                }
+            let found = memtable.inner.skiplist.search(key);
+            if found.is_some() {
+                return found
             }
         }
         
         return None
     }
 
-    pub fn add(&mut self, entry: Entry) -> Result<()> {
-        let encoded_size = entry.get_encoded_size_entry();
-        let remaining_wal_space = self.opts.max_wal_size <= (self.mutable.wal.write_at + encoded_size as u64);
-        let remaining_skiplist_size = self.opts.max_memtable_size <= (self.mutable.inner.cur_size + encoded_size as u64);
+    pub fn is_need_to_freeze(&self, entry_size_bytes: usize) -> bool {
+        let remaining_wal_space = self.opts.max_wal_size <= (self.mutable.wal.write_at + entry_size_bytes as u64);
+        let remaining_skiplist_size = self.opts.max_memtable_size <= (self.mutable.inner.cur_size + entry_size_bytes as u64);
+        return self.mutable.inner.skiplist.size > 0 && (remaining_wal_space || remaining_skiplist_size)
+    }
 
-        // at least one entry will be written
-        if self.mutable.inner.skiplist.size > 0 && (remaining_wal_space || remaining_skiplist_size) {
-            self.flush()?;
-        }
-        self.mutable.add(entry)?;
-        return Ok(());
+    pub fn add(&mut self, entry: Entry) -> Result<()> {
+        return self.mutable.add(entry);
     }
 
     /**
@@ -197,32 +193,33 @@ impl<'a> Memtables<'a> {
     2. flush its wal
     3. create new mutable
      */
-    fn flush(&mut self) -> Result<()> {
-        let new_id = self.mutable.id + 1;
-
-        let new_memtable = Memtable::new(new_id, self.next_path(), self.opts)?;
-
-        self.mutable.flush_wal()?;
-        
+    pub fn freeze_last(&mut self) -> Result<()> {
         if self.mutable.size() == 0 {
-            panic!("can't flush memtable of 0 size")
+            panic!("can't freeze memtable of 0 size")
         }
 
-        let mut old_memtable = std::mem::replace(&mut self.mutable, new_memtable);
-        // remove extra size from the file
-        old_memtable.wal.truncate()?;
+        let new_id = self.mutable.id + 1;
+        let new_memtable = Memtable::new(new_id, self.next_path(), self.opts.clone())?;
+
+        let old_memtable = std::mem::replace(&mut self.mutable, new_memtable);
         self.immutables.push_back(old_memtable);
 
         return Ok(());
     }
+    pub fn get_first_mut(&mut self) -> Option<&mut Memtable> {
+        return self.immutables.get_mut(0)
+    }
+
+    pub fn get_first(&self) -> Option<&Memtable> {
+        return self.immutables.get(0)
+    }
 
     pub fn pop_front(&mut self) -> Result<()> {
-        if self.immutables.len() == 0 {
+        if let Some(popped) = self.immutables.pop_front() {
+            popped.wal.delete()?;
+        } else {
             panic!("can't pop items of len 0")
         }
-        
-        let popped = self.immutables.pop_front().unwrap();
-        popped.wal.delete()?;
 
         return Ok(());
     }
@@ -230,7 +227,7 @@ impl<'a> Memtables<'a> {
 
 pub struct MemtablesViewIterator<'a> {
     index: usize,
-    memtables: &'a Memtables<'a>
+    memtables: &'a Memtables
 }
 
 impl<'a> MemtablesViewIterator<'a> {
@@ -243,7 +240,7 @@ impl<'a> MemtablesViewIterator<'a> {
 }
 
 impl<'a> Iterator for MemtablesViewIterator<'a> {
-    type Item = &'a Memtable<'a>;
+    type Item = &'a Memtable;
 
     fn next(&mut self) -> Option<Self::Item> {
         let size = self.memtables.immutables.len() + 1;
@@ -271,6 +268,7 @@ Test cases:
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use bytes::Bytes;
     use tempfile::tempdir;
 
@@ -288,15 +286,15 @@ mod tests {
         let comparator = BytesStringUtf8Comparator { };
         let tmp_dir = tempdir().unwrap().path().join("wals");
         
-        let opts = DbOptions {
+        let opts = Arc::new(DbOptions {
             max_wal_size: 1000,
             max_memtable_size: 1000,
-            key_comparator: Box::new(comparator),
+            key_comparator: Arc::new(comparator),
             wal_path: tmp_dir,
             ..Default::default()
-        };
+        });
         
-        let mut memtables = Memtables::open(&opts).unwrap();
+        let mut memtables = Memtables::open(opts).unwrap();
         
         memtables.add(e1.clone()).unwrap();
         memtables.add(e2.clone()).unwrap();
@@ -315,21 +313,21 @@ mod tests {
         let comparator = BytesStringUtf8Comparator { };
         let tmp_dir = tempdir().unwrap().path().join("wals");
         
-        let opts = DbOptions {
+        let opts = Arc::new(DbOptions {
             max_wal_size: 1000,
             max_memtable_size: 1000,
-            key_comparator: Box::new(comparator),
+            key_comparator: Arc::new(comparator),
             wal_path: tmp_dir,
             ..Default::default()
-        };
+        });
         
-        let mut memtables = Memtables::open(&opts).unwrap();
+        let mut memtables = Memtables::open(opts.clone()).unwrap();
         
         memtables.add(e1.clone()).unwrap();
         memtables.add(e2.clone()).unwrap();
         
         drop(memtables);
-        memtables = Memtables::open(&opts).unwrap();
+        memtables = Memtables::open(opts).unwrap();
         
         assert_eq!(memtables.get(&e1.key), Some(&e1.val_obj));
         assert_eq!(memtables.get(&e2.key), Some(&e2.val_obj));
@@ -346,15 +344,15 @@ mod tests {
         let tmp_dir = tempdir().unwrap().path().join("wals");
         
         // 0 size makes everything opening a few times.
-        let opts = DbOptions {
+        let opts = Arc::new(DbOptions {
             max_wal_size: 0,
             max_memtable_size: 0,
-            key_comparator: Box::new(comparator),
+            key_comparator: Arc::new(comparator),
             wal_path: tmp_dir,
             ..Default::default()
-        };
+        });
         
-        let mut memtables = Memtables::open(&opts).unwrap();
+        let mut memtables = Memtables::open(opts.clone()).unwrap();
         
         memtables.add(e1.clone()).unwrap();
         memtables.add(e2.clone()).unwrap();
@@ -369,7 +367,7 @@ mod tests {
         assert_eq!(memtables.immutables[0].id, 1);
         
         drop(memtables);
-        memtables = Memtables::open(&opts).unwrap();
+        memtables = Memtables::open(opts).unwrap();
         
         assert_eq!(memtables.get(&e3.key), Some(&e3.val_obj));
         assert_eq!(memtables.get(&e2.key), Some(&e2.val_obj));

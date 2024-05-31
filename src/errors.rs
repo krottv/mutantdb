@@ -14,11 +14,17 @@ pub enum Error {
     #[error("encode error")]
     EncodeError(EncodeError),
     
-    #[error("encode error")]
+    #[error("decode error")]
     DecodeError(DecodeError),
     
     #[error("unknown error")]
-    Unknown
+    Unknown,
+    
+    #[error("absent key")]
+    AbsentKey,
+
+    #[error("illegal state {0}")]
+    IllegalState(String)
 }
 
 impl From<io::Error> for Error {

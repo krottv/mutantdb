@@ -3,8 +3,8 @@ use crate::skiplist::{SkipEntry, SkiplistRaw};
 use crate::skiplist::skipnode::SkipNode;
 
 pub struct SkipIterator<'a, KEY, VALUE> where
-    KEY: 'a + Default,
-    VALUE: 'a + Default {
+    KEY: Default,
+    VALUE: Default {
     head_bottom: *mut SkipNode<SkipEntry<KEY, VALUE>>,
     phantom_data: PhantomData<&'a SkipEntry<KEY, VALUE>>,
 }
@@ -14,9 +14,9 @@ By adding these lifetime annotations,
 the Rust compiler can statically verify the memory safety of the code 
 and ensure that the SkipIterator does not outlive the SkiplistRaw instance from which it was created.
  */
-impl<'a, KEY, VALUE> IntoIterator for &'a SkiplistRaw<'a, KEY, VALUE> where
-    KEY: 'a + Default,
-    VALUE: 'a + Default {
+impl<'a, KEY, VALUE> IntoIterator for &'a SkiplistRaw<KEY, VALUE> where
+    KEY: Default,
+    VALUE: Default {
     type Item = &'a SkipEntry<KEY, VALUE>;
     type IntoIter = SkipIterator<'a, KEY, VALUE>;
 
@@ -61,17 +61,17 @@ that the mutable reference &'a mut SkiplistRaw<'a, KEY, VALUE> has the
 same lifetime as the KEY and VALUE instances, which may not always be the case. 
 This could lead to potential memory safety issues, such as dangling references or use-after-free bugs.
  */
-pub struct SkipDrain<'a, 'b, KEY, VALUE> where
-    KEY: 'a + Default,
-    VALUE: 'a + Default, {
+pub struct SkipDrain<'b, KEY, VALUE> where
+    KEY: Default,
+    VALUE: Default, {
     head_bottom: *mut SkipNode<SkipEntry<KEY, VALUE>>,
-    skiplist_raw: &'b mut SkiplistRaw<'a, KEY, VALUE>,
+    skiplist_raw: &'b mut SkiplistRaw<KEY, VALUE>,
 }
 
-impl<'a, 'b, KEY, VALUE> SkiplistRaw<'a, KEY, VALUE> where
-    KEY: 'a + Default,
-    VALUE: 'a + Default {
-    pub fn drain(&'b mut self) -> SkipDrain<'a, 'b, KEY, VALUE> {
+impl<'b, KEY, VALUE> SkiplistRaw<KEY, VALUE> where
+    KEY: Default,
+    VALUE: Default {
+    pub fn drain(&'b mut self) -> SkipDrain<'b, KEY, VALUE> {
         SkipDrain {
             head_bottom: unsafe { (*self.head_bottom).next },
             skiplist_raw: self,
@@ -79,9 +79,9 @@ impl<'a, 'b, KEY, VALUE> SkiplistRaw<'a, KEY, VALUE> where
     }
 }
 
-impl<'a, 'b, KEY, VALUE> Iterator for SkipDrain<'a, 'b, KEY, VALUE> where
-    KEY: 'a + Default,
-    VALUE: 'a + Default {
+impl<'b, KEY, VALUE> Iterator for SkipDrain<'b, KEY, VALUE> where
+    KEY: Default,
+    VALUE: Default {
     type Item = Box<SkipEntry<KEY, VALUE>>;
 
     fn next(&mut self) -> Option<Self::Item> {

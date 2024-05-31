@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::mem;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
 use prost::Message;
@@ -15,8 +16,8 @@ use crate::memtable::Memtable;
 use crate::opts::DbOptions;
 use crate::sstable::SSTable;
 
-pub struct Builder<'a> {
-    opts: &'a DbOptions,
+pub struct Builder {
+    opts: Arc<DbOptions>,
     counter: u64,
     writer: BufWriter<File>,
     index: TableIndex,
@@ -27,9 +28,9 @@ pub struct Builder<'a> {
     file_path: PathBuf,
 }
 
-impl<'a> Builder<'a> {
+impl Builder {
     pub fn new(file_path: PathBuf,
-               opts: &'a DbOptions,
+               opts: Arc<DbOptions>,
                max_count: u64,
                max_block_size: usize,
                all_entries_size: u64,
@@ -95,8 +96,7 @@ impl<'a> Builder<'a> {
         return Ok(());
     }
 
-    // todo: delete wal when saved to manifest
-    pub fn build(mut self) -> Result<SSTable<'a>> {
+    pub fn build(mut self) -> Result<SSTable> {
         if self.block.len != 0 {
             self.index.blocks.push(self.block);
         }
@@ -108,12 +108,12 @@ impl<'a> Builder<'a> {
         self.writer.write(&self.buffer)?;
         self.writer.flush()?;
 
-        return SSTable::from_builder(self.index, self.file_path, self.opts);
+        return SSTable::from_builder(self.index, self.file_path, self.opts.clone());
     }
 
-    pub fn build_from_memtable(mem: Memtable,
+    pub fn build_from_memtable(mem: &Memtable,
                                file_path: PathBuf,
-                               opts: &'a DbOptions, ) -> Result<SSTable<'a>> {
+                               opts: Arc<DbOptions>, ) -> Result<SSTable> {
         let max_block_size = max(opts.block_max_size, mem.inner.compute_max_entry_size() as u32);
         let all_entries_size: u64 = mem.inner.cur_size;
         let max_count = mem.inner.skiplist.size as u64;

@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use memmap2::Mmap;
@@ -31,12 +32,12 @@ Table index (arbitrary size)
  */
 
 //todo: checksum
-pub struct SSTable<'a> {
+pub struct SSTable {
     pub index: TableIndex,
     // cache for blocks. Simpler then hashmap based
     pub mmap: Mmap,
     pub file_path: PathBuf,
-    opts: &'a DbOptions,
+    opts: Arc<DbOptions>,
     pub first_key: Bytes,
     pub last_key: Bytes
 }
@@ -56,8 +57,8 @@ pub struct Block {
     pub entries: VecDeque<Entry>,
 }
 
-impl<'a> SSTable<'a> {
-    pub fn from_builder(index: TableIndex, file_path: PathBuf, opts: &'a DbOptions) -> Result<SSTable<'a>> {
+impl SSTable {
+    pub fn from_builder(index: TableIndex, file_path: PathBuf, opts: Arc<DbOptions>) -> Result<SSTable> {
         unsafe {
             let file = File::open(&file_path)?;
             let mmap = Mmap::map(&file)?;
@@ -85,7 +86,7 @@ impl<'a> SSTable<'a> {
     - read_exact guarantees that it will either read the exact
      number of bytes requested (the buffer size) or return an error.
      */
-    pub fn open(file_path: PathBuf, opts: &'a DbOptions) -> Result<SSTable<'a>> {
+    pub fn open(file_path: PathBuf, opts: Arc<DbOptions>) -> Result<SSTable> {
         let file = File::open(&file_path)?;
         let mut reader = BufReader::new(file);
 
@@ -206,6 +207,11 @@ impl<'a> SSTable<'a> {
 
         return None;
     }
+    
+    pub fn create_path(id: usize) -> PathBuf {
+        let s = format!("{id:}.mem");
+        PathBuf::from(s)
+    }
 }
 
 /*
@@ -218,6 +224,7 @@ Test cases:
  */
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use bytes::Bytes;
     use memmap2::MmapOptions;
     use tempfile::tempdir;
@@ -249,18 +256,18 @@ mod tests {
         let tmp_dir = tempdir().unwrap();
         let wal_path = tmp_dir.path().join("1.wal");
         let sstable_path = tmp_dir.path().join("1.mem");
-        let opts = DbOptions {
+        let opts = Arc::new(DbOptions {
             max_wal_size: 1000,
             block_max_size: 1000,
             ..Default::default()
-        };
+        });
 
-        let mut memtable = Memtable::new(1, wal_path, &opts).unwrap();
+        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
         memtable.add(e1.clone()).unwrap();
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let sstable = Builder::build_from_memtable(memtable, sstable_path, &opts).unwrap();
+        let sstable = Builder::build_from_memtable(&memtable, sstable_path, opts).unwrap();
         let block = sstable.get_block(&sstable.index.blocks[0]);
 
         assert_eq!(block.entries.len(), 3);
@@ -303,18 +310,18 @@ mod tests {
         let tmp_dir = tempdir().unwrap();
         let wal_path = tmp_dir.path().join("1.wal");
         let sstable_path = tmp_dir.path().join("1.mem");
-        let opts = DbOptions {
+        let opts = Arc::new(DbOptions {
             max_wal_size: 1000,
             block_max_size: 1,
             ..Default::default()
-        };
+        });
 
-        let mut memtable = Memtable::new(1, wal_path, &opts).unwrap();
+        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
         memtable.add(e1.clone()).unwrap();
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let sstable = Builder::build_from_memtable(memtable, sstable_path, &opts).unwrap();
+        let sstable = Builder::build_from_memtable(&memtable, sstable_path, opts).unwrap();
         
         assert_eq!(sstable.index.blocks.len(), 3);
         assert_eq!(&sstable.index.first_key, &e1.key.to_vec());
@@ -363,21 +370,21 @@ mod tests {
         let tmp_dir = tempdir().unwrap();
         let wal_path = tmp_dir.path().join("1.wal");
         let sstable_path = tmp_dir.path().join("1.mem");
-        let opts = DbOptions {
+        let opts = Arc::new(DbOptions {
             max_wal_size: 1000,
             block_max_size: 1000,
             ..Default::default()
-        };
+        });
 
-        let mut memtable = Memtable::new(1, wal_path, &opts).unwrap();
+        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
         memtable.add(e1.clone()).unwrap();
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let mut sstable = Builder::build_from_memtable(memtable, sstable_path.clone(), &opts).unwrap();
+        let mut sstable = Builder::build_from_memtable(&memtable, sstable_path.clone(), opts.clone()).unwrap();
         drop(sstable);
 
-        sstable = SSTable::open(sstable_path, &opts).unwrap();
+        sstable = SSTable::open(sstable_path, opts).unwrap();
         let block = sstable.get_block(&sstable.index.blocks[0]);
 
         assert_eq!(block.entries.len(), 3);
@@ -400,17 +407,17 @@ mod tests {
             });
         }
 
-        let opts = DbOptions {
-            key_comparator: Box::new(BytesI32Comparator {}),
+        let opts = Arc::new(DbOptions {
+            key_comparator: Arc::new(BytesI32Comparator {}),
             ..Default::default()
-        };
+        });
 
         let table_index = TableIndex {
             blocks: block_indexes.clone(),
             max_version: 0,
             key_count: 0,
-            first_key: (0 as i32).to_be_bytes().to_vec(),
-            last_key: (28 as i32).to_be_bytes().to_vec()
+            first_key: 0i32.to_be_bytes().to_vec(),
+            last_key: 28i32.to_be_bytes().to_vec()
         };
         let tmp_dir = tempdir().unwrap();
         let sstable_path = tmp_dir.path().join("1.mem");
@@ -420,27 +427,27 @@ mod tests {
             index: table_index,
             mmap: MmapOptions::new().map_anon().unwrap().make_read_only().unwrap(),
             file_path: sstable_path,
-            opts: &opts,
-            first_key: Bytes::from((0 as i32).to_be_bytes().to_vec()),
-            last_key: Bytes::from((28 as i32).to_be_bytes().to_vec())
+            opts: opts,
+            first_key: Bytes::from(0i32.to_be_bytes().to_vec()),
+            last_key: Bytes::from(28i32.to_be_bytes().to_vec())
         };
 
-        let mut key = Bytes::from((16 as i32).to_be_bytes().to_vec());
+        let mut key = Bytes::from(16i32.to_be_bytes().to_vec());
         assert_eq!(sstable.bsearch_block_index(&key), Some(&block_indexes[4]));
         
-        key = Bytes::from((18 as i32).to_be_bytes().to_vec());
+        key = Bytes::from(18i32.to_be_bytes().to_vec());
         assert_eq!(sstable.bsearch_block_index(&key), Some(&block_indexes[4]));
 
-        key = Bytes::from((5 as i32).to_be_bytes().to_vec());
+        key = Bytes::from(5i32.to_be_bytes().to_vec());
         assert_eq!(sstable.bsearch_block_index(&key), Some(&block_indexes[1]));
 
-        key = Bytes::from((4 as i32).to_be_bytes().to_vec());
+        key = Bytes::from(4i32.to_be_bytes().to_vec());
         assert_eq!(sstable.bsearch_block_index(&key), Some(&block_indexes[1]));
 
-        key = Bytes::from((3 as i32).to_be_bytes().to_vec());
+        key = Bytes::from(3i32.to_be_bytes().to_vec());
         assert_eq!(sstable.bsearch_block_index(&key), Some(&block_indexes[0]));
 
-        key = Bytes::from((29 as i32).to_be_bytes().to_vec());
+        key = Bytes::from(29i32.to_be_bytes().to_vec());
         assert_eq!(sstable.bsearch_block_index(&key), None);
 
     }

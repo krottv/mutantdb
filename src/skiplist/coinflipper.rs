@@ -1,5 +1,6 @@
 use std::collections::hash_map::{DefaultHasher, RandomState};
 use std::hash::{BuildHasher, Hasher};
+use rand::random;
 
 pub trait CoinFlipper {
     fn flip(&self) -> bool;
@@ -18,6 +19,15 @@ impl CoinFlipperHash {
 impl CoinFlipper for CoinFlipperHash {
     fn flip(&self) -> bool {
         let random_value = self.hasher.finish() as usize;
+        return random_value < (usize::MAX / 2);
+    }
+}
+
+pub struct CoinFlipperRand {}
+
+impl CoinFlipper for CoinFlipperRand {
+    fn flip(&self) -> bool {
+        let random_value: usize = random();
         return random_value < (usize::MAX / 2);
     }
 }

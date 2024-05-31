@@ -11,10 +11,7 @@ Also assume that there's no duplicates inside a single iterator
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-use bytes::Bytes;
-
 use crate::comparator::KeyComparator;
-use crate::entry::Entry;
 
 pub struct MergeIterator<'a, Item, Iter: Iterator<Item = Item>> {
     iterators: Vec<Iter>,
@@ -167,6 +164,7 @@ impl<'a, Item, Iter: Iterator<Item = Item>> Iterator for MergeIterator<'a, Item,
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use bytes::Bytes;
     use tempfile::TempDir;
 
@@ -180,14 +178,14 @@ mod tests {
 
     use super::*;
 
-    fn create_sstable<'a>(tmp_dir: &TempDir, opts: &'a DbOptions, entries: Vec<Entry>, id: usize) -> SSTable<'a> {
+    fn create_sstable<'a>(tmp_dir: &TempDir, opts: Arc<DbOptions>, entries: Vec<Entry>, id: usize) -> SSTable {
         let sstable_path = tmp_dir.path().join(format!("{id:}.mem"));
         let wal_path = tmp_dir.path().join(format!("{id:}.wal"));
-        let mut memtable = Memtable::new(1, wal_path, &opts).unwrap();
+        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
         for entry in entries {
             memtable.add(entry).unwrap();
         }
-        Builder::build_from_memtable(memtable, sstable_path, &opts).unwrap()
+        Builder::build_from_memtable(&memtable, sstable_path, opts).unwrap()
     }
     
     fn new_entry(key: u8, value: u8) -> Entry {
@@ -217,7 +215,7 @@ mod tests {
         let e2 = new_entry(2, 2);
         let e4 = new_entry(4, 4);
 
-        let sstable = create_sstable(&tmp_dir, &opts, vec![e4.clone(), e3.clone(), e2.clone(), e1.clone()], 1);
+        let sstable = create_sstable(&tmp_dir, Arc::new(opts), vec![e4.clone(), e3.clone(), e2.clone(), e1.clone()], 1);
         let mut merge_iter = MergeIterator::new(vec![SSTableIterator::new(&sstable)], &entry_comparator);
 
         assert_eq!(merge_iter.next(), Some(e1));
@@ -230,14 +228,14 @@ mod tests {
     #[test]
     fn all_iterators_empty_test() {
         let tmp_dir = TempDir::new().unwrap();
-        let opts = DbOptions {
+        let opts = Arc::new(DbOptions {
             block_max_size: 1000,
             ..Default::default()
-        };
+        });
         let comparator = BytesStringUtf8Comparator {};
         let entry_comparator = EntryComparator::new(&comparator);
-        let sstable1 = create_sstable(&tmp_dir, &opts,vec![], 1);
-        let sstable2 = create_sstable(&tmp_dir, &opts,vec![], 2);
+        let sstable1 = create_sstable(&tmp_dir, opts.clone(),vec![], 1);
+        let sstable2 = create_sstable(&tmp_dir, opts.clone(),vec![], 2);
 
         let iter1 = SSTableIterator::new(&sstable1);
         let iter2 = SSTableIterator::new(&sstable2);
@@ -250,10 +248,10 @@ mod tests {
     #[test]
     fn basic_merge_test() {
         let tmp_dir = TempDir::new().unwrap();
-        let opts = DbOptions {
+        let opts = Arc::new(DbOptions {
             block_max_size: 1000,
             ..Default::default()
-        };
+        });
         let comparator = BytesStringUtf8Comparator {};
         let entry_comparator = EntryComparator::new(&comparator);
         
@@ -262,8 +260,8 @@ mod tests {
         let e3 = new_entry(3, 3);
         let e4 = new_entry(4, 4);
 
-        let sstable1 = create_sstable(&tmp_dir, &opts, vec![e1.clone(), e3.clone()], 1);
-        let sstable2 = create_sstable(&tmp_dir, &opts, vec![e2.clone(), e4.clone()], 2);
+        let sstable1 = create_sstable(&tmp_dir, opts.clone(), vec![e1.clone(), e3.clone()], 1);
+        let sstable2 = create_sstable(&tmp_dir, opts.clone(), vec![e2.clone(), e4.clone()], 2);
 
         let mut iter1 = SSTableIterator::new(&sstable1);
         let mut iter2 = SSTableIterator::new(&sstable2);
@@ -291,10 +289,10 @@ mod tests {
     #[test]
     fn duplicate_keys_test() {
         let tmp_dir = TempDir::new().unwrap();
-        let opts = DbOptions {
+        let opts = Arc::new(DbOptions {
             block_max_size: 1000,
             ..Default::default()
-        };
+        });
         let comparator = BytesStringUtf8Comparator {};
         let entry_comparator = EntryComparator::new(&comparator);
         
@@ -303,8 +301,8 @@ mod tests {
         let e3 = Entry::new(Bytes::from("2key"), Bytes::from("value3"), META_ADD);
         let e4 = Entry::new(Bytes::from("3key"), Bytes::from("value4"), META_ADD);
 
-        let sstable1 = create_sstable(&tmp_dir, &opts, vec![e1.clone(), e3.clone()], 1);
-        let sstable2 = create_sstable(&tmp_dir, &opts, vec![e2.clone(), e4.clone()], 2);
+        let sstable1 = create_sstable(&tmp_dir, opts.clone(), vec![e1.clone(), e3.clone()], 1);
+        let sstable2 = create_sstable(&tmp_dir, opts.clone(), vec![e2.clone(), e4.clone()], 2);
 
         let iter1 = SSTableIterator::new(&sstable1);
         let iter2 = SSTableIterator::new(&sstable2);
@@ -321,18 +319,18 @@ mod tests {
     #[test]
     fn empty_iterators_test() {
         let tmp_dir = TempDir::new().unwrap();
-        let opts = DbOptions {
+        let opts = Arc::new(DbOptions {
             block_max_size: 1000,
             ..Default::default()
-        };
+        });
         let comparator = BytesStringUtf8Comparator {};
         let entry_comparator = EntryComparator::new(&comparator);
         
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), META_ADD);
         let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), META_ADD);
 
-        let sstable1 = create_sstable(&tmp_dir, &opts,vec![e1.clone(), e2.clone()], 1);
-        let sstable2 = create_sstable(&tmp_dir, &opts,vec![], 2);
+        let sstable1 = create_sstable(&tmp_dir, opts.clone(),vec![e1.clone(), e2.clone()], 1);
+        let sstable2 = create_sstable(&tmp_dir, opts.clone(),vec![], 2);
 
         let iter1 = SSTableIterator::new(&sstable1);
         let iter2 = SSTableIterator::new(&sstable2);

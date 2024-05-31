@@ -2,7 +2,7 @@ use crate::entry::Entry;
 use crate::sstable::{Block, SSTable};
 
 pub struct SSTableIterator<'a> {
-    sstable: &'a SSTable<'a>,
+    sstable: &'a SSTable,
     block: Option<Block>,
     block_position: usize
 }

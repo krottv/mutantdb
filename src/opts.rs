@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use bytes::Bytes;
 use crate::comparator::{BytesStringUtf8Comparator, KeyComparator};
 
@@ -8,7 +9,7 @@ pub struct DbOptions {
     // in bytes. actual size can exceed this if single entry is bigger
     pub max_memtable_size: u64,
     // since we have one table it is fine
-    pub key_comparator: Box<dyn KeyComparator<Bytes>>,
+    pub key_comparator: Arc<dyn KeyComparator<Bytes>>,
     
     pub wal_path: PathBuf,
     
@@ -25,7 +26,7 @@ impl Default for DbOptions {
             // 5 mb
             max_memtable_size: 50000,
             
-            key_comparator: Box::new(BytesStringUtf8Comparator {}),
+            key_comparator: Arc::new(BytesStringUtf8Comparator {}),
             
             wal_path: PathBuf::from( "/"),
             

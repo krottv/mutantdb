@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use memmap2::MmapMut;
-use prost::EncodeError;
+
 use crate::comparator::KeyComparator;
-use crate::errors::Error;
 
 /**
 ## Encoding format for Entry
@@ -205,8 +205,9 @@ impl<'a> KeyComparator<Entry> for EntryComparator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::entry::{Entry, ValObj};
     use bytes::{Buf, Bytes, BytesMut};
+
+    use crate::entry::{Entry, ValObj};
 
     #[test]
     fn encode_decode() {
