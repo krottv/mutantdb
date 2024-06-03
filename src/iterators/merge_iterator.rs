@@ -168,29 +168,18 @@ impl<Item> Iterator for MergeIterator<Item> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
     use bytes::Bytes;
     use tempfile::TempDir;
 
     use crate::comparator::BytesStringUtf8Comparator;
     use crate::entry::{Entry, EntryComparator, META_ADD, ValObj};
-    use crate::memtable::Memtable;
-    use crate::opts::DbOptions;
-    use crate::builder::Builder;
     use crate::iterators::sstable_iterator::SSTableIterator;
-    use crate::sstable::SSTable;
+    use crate::opts::DbOptions;
+    use crate::sstable::tests::create_sstable;
 
     use super::*;
 
-    fn create_sstable<'a>(tmp_dir: &TempDir, opts: Arc<DbOptions>, entries: Vec<Entry>, id: usize) -> SSTable {
-        let sstable_path = tmp_dir.path().join(format!("{id:}.mem"));
-        let wal_path = tmp_dir.path().join(format!("{id:}.wal"));
-        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
-        for entry in entries {
-            memtable.add(entry).unwrap();
-        }
-        Builder::build_from_memtable(&memtable, sstable_path, opts).unwrap()
-    }
-    
     fn new_entry(key: u8, value: u8) -> Entry {
         Entry {
             key: Bytes::from(key.to_string()),

@@ -1,15 +1,17 @@
-use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
+
 use bytes::Bytes;
-use crate::levels::LevelsController;
+
+use crate::builder::Builder;
 use crate::entry::{Entry, Key, META_ADD, META_DELETE, ValObj};
-use crate::errors::Error::{AbsentKey, IllegalState};
+use crate::errors::Error::IllegalState;
+use crate::errors::Result;
+use crate::levels::LevelsController;
+use crate::logger::Logger;
 use crate::memtable::Memtables;
 use crate::opts::DbOptions;
-use crate::errors::Result;
-use crate::logger::Logger;
-use crate::builder::Builder;
 use crate::sstable::SSTable;
 
 pub struct Core {

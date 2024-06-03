@@ -49,10 +49,6 @@ pub struct SSTable {
 You still need an in-memory index to tell you the offsets for some of the keys, 
 but it can be sparse: one key for every few kilobytes of segment file is sufficient, 
 because a few kilobytes can be scanned very quickly.
-
-if block size is 4kb. Then 
-
-
  */
 
 //todo: compression
@@ -272,13 +268,13 @@ Test cases:
 5. check search of block
  */
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::mem::ManuallyDrop;
     use std::sync::{Arc, atomic};
 
     use bytes::Bytes;
     use memmap2::MmapOptions;
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
 
     use proto::meta::{BlockIndex, TableIndex};
 
@@ -291,8 +287,26 @@ mod tests {
     use crate::opts::DbOptions;
     use crate::sstable::SSTable;
 
+    pub(crate) fn create_sstable<'a>(tmp_dir: &TempDir, opts: Arc<DbOptions>, entries: Vec<Entry>, id: usize) -> SSTable {
+        let sstable_path = tmp_dir.path().join(format!("{id:}.mem"));
+        let wal_path = tmp_dir.path().join(format!("{id:}.wal"));
+        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
+        for entry in entries {
+            memtable.add(entry).unwrap();
+        }
+        Builder::build_from_memtable(&memtable, sstable_path, opts).unwrap()
+    }
+
     #[test]
     fn basic_create() {
+        test_basic_create(false)
+    }
+    #[test]
+    fn basic_reopen() {
+        test_basic_create(true)
+    }
+    
+    fn test_basic_create(recreate: bool) {
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), entry::META_ADD);
         let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), entry::META_ADD);
         let e3 = Entry {
@@ -318,7 +332,12 @@ mod tests {
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let sstable = Builder::build_from_memtable(&memtable, sstable_path, opts).unwrap();
+        let mut sstable = Builder::build_from_memtable(&memtable, sstable_path.clone(), opts.clone()).unwrap();
+        if recreate {
+            drop(sstable);
+            sstable = SSTable::open(sstable_path.clone(), opts.clone()).unwrap()
+        }
+        
         let block = sstable.get_block(&sstable.index.blocks[0]);
 
         assert_eq!(block.entries.len(), 3);
@@ -346,8 +365,7 @@ mod tests {
         assert_eq!(None, iterator.next());
     }
 
-    #[test]
-    fn many_blocks() {
+    fn test_many_blocks(recreate: bool) {
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), entry::META_ADD);
         let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), entry::META_ADD);
         let e3 = Entry {
@@ -373,7 +391,10 @@ mod tests {
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let sstable = Builder::build_from_memtable(&memtable, sstable_path, opts).unwrap();
+        let mut sstable = Builder::build_from_memtable(&memtable, sstable_path.clone(), opts.clone()).unwrap();
+        if recreate {
+            sstable = SSTable::open(sstable_path, opts).unwrap()
+        }
 
         assert_eq!(sstable.index.blocks.len(), 3);
         assert_eq!(&sstable.first_key, &e1.key.to_vec());
@@ -408,111 +429,16 @@ mod tests {
         assert_eq!(Some(e3), iterator.next());
         assert_eq!(None, iterator.next());
     }
-
+    
     #[test]
-    fn basic_reopen() {
-        let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), entry::META_ADD);
-        let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), entry::META_ADD);
-        let e3 = Entry {
-            key: Bytes::from("3key"),
-            val_obj: ValObj {
-                value: Bytes::from("value3"),
-                meta: 10,
-                user_meta: 15,
-                version: 1000,
-            },
-        };
-        let tmp_dir = tempdir().unwrap();
-        let wal_path = tmp_dir.path().join("1.wal");
-        let sstable_path = tmp_dir.path().join("1.mem");
-        let opts = Arc::new(DbOptions {
-            max_wal_size: 1000,
-            block_max_size: 1000,
-            ..Default::default()
-        });
-
-        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
-        memtable.add(e1.clone()).unwrap();
-        memtable.add(e2.clone()).unwrap();
-        memtable.add(e3.clone()).unwrap();
-
-        let mut sstable = Builder::build_from_memtable(&memtable, sstable_path.clone(), opts.clone()).unwrap();
-        drop(sstable);
-
-        sstable = SSTable::open(sstable_path, opts).unwrap();
-        let block = sstable.get_block(&sstable.index.blocks[0]);
-
-        assert_eq!(&sstable.index.blocks.get(0).unwrap().key, &e1.key.to_vec());
-        assert_eq!(block.entries.len(), 3);
-        assert_eq!(&e1, &block.entries[0]);
-        assert_eq!(&e2, &block.entries[1]);
-        assert_eq!(&e3, &block.entries[2]);
+    fn many_blocks() {
+        test_many_blocks(false)
     }
 
 
     #[test]
     fn many_blocks_reopen() {
-        let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), entry::META_ADD);
-        let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), entry::META_ADD);
-        let e3 = Entry {
-            key: Bytes::from("3key"),
-            val_obj: ValObj {
-                value: Bytes::from("value3"),
-                meta: 10,
-                user_meta: 15,
-                version: 1000,
-            },
-        };
-        let tmp_dir = tempdir().unwrap();
-        let wal_path = tmp_dir.path().join("1.wal");
-        let sstable_path = tmp_dir.path().join("1.mem");
-        let opts = Arc::new(DbOptions {
-            max_wal_size: 1000,
-            block_max_size: 1,
-            ..Default::default()
-        });
-
-        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
-        memtable.add(e1.clone()).unwrap();
-        memtable.add(e2.clone()).unwrap();
-        memtable.add(e3.clone()).unwrap();
-
-        let mut sstable = Builder::build_from_memtable(&memtable, sstable_path.clone(), opts.clone()).unwrap();
-        drop(sstable);
-        sstable = SSTable::open(sstable_path, opts.clone()).unwrap();
-
-        assert_eq!(sstable.index.blocks.len(), 3);
-        assert_eq!(&sstable.first_key, &e1.key.to_vec());
-        assert_eq!(&sstable.last_key, &e3.key.to_vec());
-
-        let block0 = sstable.get_block(&sstable.index.blocks[0]);
-        assert_eq!(&sstable.index.blocks[0].key, &e1.key.to_vec());
-        assert_eq!(block0.entries.len(), 1);
-        assert_eq!(&e1, &block0.entries[0]);
-
-        let block1 = sstable.get_block(&sstable.index.blocks[1]);
-        assert_eq!(&sstable.index.blocks[1].key, &e2.key.to_vec());
-        assert_eq!(block1.entries.len(), 1);
-        assert_eq!(&e2, &block1.entries[0]);
-
-        let block2 = sstable.get_block(&sstable.index.blocks[2]);
-        assert_eq!(&sstable.index.blocks[2].key, &e3.key.to_vec());
-        assert_eq!(block2.entries.len(), 1);
-        assert_eq!(&e3, &block2.entries[0]);
-
-        assert_eq!(&e3, &sstable.find_entry(&e3.key).unwrap());
-        assert_eq!(&e2, &sstable.find_entry(&e2.key).unwrap());
-        assert_eq!(&e1, &sstable.find_entry(&e1.key).unwrap());
-        let absent_key = Bytes::from("key4");
-        assert_eq!(None, sstable.find_entry(&absent_key));
-
-        // iterator
-        let mut iterator = SSTableIterator::new(Arc::new(sstable));
-
-        assert_eq!(Some(e1), iterator.next());
-        assert_eq!(Some(e2), iterator.next());
-        assert_eq!(Some(e3), iterator.next());
-        assert_eq!(None, iterator.next());
+        test_many_blocks(true)
     }
 
     #[test]

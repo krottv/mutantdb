@@ -58,7 +58,7 @@ impl Builder {
         })
     }
 
-    pub fn add_entry(&mut self, key: &Bytes, val_obj: &ValObj) -> Result<u64> {
+    pub fn add_entry(&mut self, key: &Bytes, val_obj: &ValObj) -> Result<()> {
         
         if self.counter == 0 {
             self.block.key = key.to_vec();
@@ -88,9 +88,7 @@ impl Builder {
 
         self.counter += 1;
         self.max_version = max(self.max_version, val_obj.version);
-
-        let pos = self.writer.stream_position()?;
-        return Ok(pos);
+        return Ok(());
     }
 
     pub fn build(mut self) -> Result<SSTable> {
@@ -131,7 +129,7 @@ impl Builder {
 
         builder.build()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.counter == 0
     }
