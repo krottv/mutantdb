@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use bytes::Bytes;
 
-pub trait KeyComparator<T> {
+pub trait KeyComparator<T>: Send + Sync {
     fn compare(&self, compare: &T, another: &T) -> Ordering;
 }
 

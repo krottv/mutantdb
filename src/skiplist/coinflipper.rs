@@ -2,7 +2,7 @@ use std::collections::hash_map::{DefaultHasher, RandomState};
 use std::hash::{BuildHasher, Hasher};
 use rand::random;
 
-pub trait CoinFlipper {
+pub trait CoinFlipper: Send + Sync {
     fn flip(&self) -> bool;
 }
 

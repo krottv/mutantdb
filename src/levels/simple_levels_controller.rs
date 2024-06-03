@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use std::sync::{Arc, RwLock};
 
 use crate::builder::Builder;
-use crate::core::SSTableIdGenerator;
 use crate::entry::{Entry, EntryComparator, Key, ValObj};
 use crate::errors::Result;
 use crate::iterators::concat_iterator::ConcatIterator;
@@ -11,6 +10,7 @@ use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::sstable_iterator::SSTableIterator;
 use crate::levels::LevelsController;
 use crate::opts::{DbOptions, LevelsOptions};
+use crate::sstable::id_generator::SSTableIdGenerator;
 use crate::sstable::SSTable;
 
 #[derive(Clone)]
@@ -280,11 +280,11 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::comparator::BytesI32Comparator;
-    use crate::core::SSTableIdGenerator;
     use crate::entry::{Entry, META_ADD, ValObj};
     use crate::levels::LevelsController;
     use crate::levels::simple_levels_controller::SimpleLevelsController;
     use crate::opts::{DbOptions, LevelsOptions};
+    use crate::sstable::id_generator::SSTableIdGenerator;
     use crate::sstable::tests::create_sstable;
 
     fn new_entry(key: i32, value: i32) -> Entry {

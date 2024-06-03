@@ -61,6 +61,15 @@ pub struct SkiplistRaw<KEY, VALUE> where
     allow_duplicates: bool,
 }
 
+unsafe impl<KEY, VALUE> Send for SkiplistRaw<KEY, VALUE> where
+    KEY: Send + Default,
+    VALUE: Send + Default
+{}
+unsafe impl<KEY, VALUE> Sync for SkiplistRaw<KEY, VALUE> where
+    KEY: Sync + Default,
+    VALUE: Sync + Default
+{}
+
 impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
     KEY: Default,
     VALUE: Default {

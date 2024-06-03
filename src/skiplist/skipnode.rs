@@ -10,6 +10,8 @@ pub struct SkipNode<T> {
     pub below: *mut SkipNode<T>,
     pub above: *mut SkipNode<T>,
 }
+unsafe impl<T> Send for SkipNode<T> where T: Send {}
+unsafe impl<T> Sync for SkipNode<T> where T: Sync {}
 
 impl<T> SkipNode<T> {
     pub fn new(data: SkipData<T>) -> Self {

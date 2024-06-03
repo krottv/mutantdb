@@ -1,3 +1,5 @@
+pub mod id_generator;
+
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fs;

@@ -11,7 +11,7 @@ use crate::entry::{Entry, Key, ValObj};
 use crate::sstable::SSTable;
 use crate::errors::Result;
 
-pub trait LevelsController {
+pub trait LevelsController: Send + Sync {
     // not mut because it should handle concurrency inside
     fn add_to_l0(&self, sstable: SSTable) -> Result<()>;
     fn get(&self, key: &Key) -> Option<ValObj>;

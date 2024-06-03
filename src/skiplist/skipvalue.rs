@@ -6,6 +6,8 @@ pub enum SkipData<T> {
     Pointer(*mut T),
 }
 
+unsafe impl<T> Send for SkipData<T> where T: Send {}
+unsafe impl<T> Sync for SkipData<T> where T: Sync {}
 
 impl<T> SkipData<T> {
     pub fn is_none(&self) -> bool {
