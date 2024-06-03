@@ -14,6 +14,6 @@ use crate::errors::Result;
 pub trait LevelsController {
     // not mut because it should handle concurrency inside
     fn add_to_l0(&self, sstable: SSTable) -> Result<()>;
-    fn get(&self, key: &Key) -> Result<ValObj>;
+    fn get(&self, key: &Key) -> Option<ValObj>;
     fn iter(&self) -> Box<dyn Iterator<Item = Entry>>;
 }

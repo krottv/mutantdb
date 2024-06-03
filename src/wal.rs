@@ -1,6 +1,8 @@
 use std::{fs};
 use std::fs::{File, OpenOptions};
+use std::mem::ManuallyDrop;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::{BytesMut};
 use memmap2::MmapMut;
@@ -8,9 +10,9 @@ use memmap2::MmapMut;
 use crate::entry::{Entry, ZERO_ENTRY_SIZE};
 use crate::opts::DbOptions;
 use crate::errors::Result;
+use crate::util::no_fail;
 
 //todo: checksum to verify if WAL corrupted
-//todo: think about flushing on drop call, because the whole DB can be dropped and it would be good to flush/trunk in that case
 
 // Is it worth using memory map?
 // Traditional file writing involves copying data from user space to kernel space buffers and then to disk.
@@ -18,7 +20,8 @@ use crate::errors::Result;
 
 // But, at the same time here memory caching is not needed at all.
 pub struct Wal {
-    mmap: MmapMut,
+    // manually drop because we need to drop it before deleting file to prevent errors
+    mmap: ManuallyDrop<MmapMut>,
     path: PathBuf,
     file: File,
     // in bytes
@@ -26,6 +29,7 @@ pub struct Wal {
     // in bytes
     len: u64,
     entry_buf: BytesMut,
+    delete_on_close: AtomicBool
 }
 
 impl Wal {
@@ -49,7 +53,7 @@ impl Wal {
         }
 
         unsafe {
-            let mmap = MmapMut::map_mut(&file)?;
+            let mmap = ManuallyDrop::new(MmapMut::map_mut(&file)?);
             return Ok(
                 Wal {
                     mmap,
@@ -58,6 +62,7 @@ impl Wal {
                     write_at: 0,
                     len: new_len,
                     entry_buf: BytesMut::new(),
+                    delete_on_close: AtomicBool::new(false)
                 }
             );
         }
@@ -104,7 +109,8 @@ impl Wal {
             self.file.sync_all()?;
             unsafe {
                 // reopen to reflect changed length.
-                self.mmap = MmapMut::map_mut(&self.file)?
+                ManuallyDrop::drop(&mut self.mmap);
+                self.mmap = ManuallyDrop::new(MmapMut::map_mut(&self.file)?);
             }
         }
 
@@ -145,9 +151,25 @@ impl Wal {
         return Ok(());
     }
 
-    pub fn delete(&self) -> Result<()> {
-        fs::remove_file(&self.path)?;
-        return Ok(());
+    pub fn mark_delete(&self) {
+        self.delete_on_close.store(true, Ordering::Relaxed);   
+    }
+    
+    pub fn drop_no_fail(&mut self) -> Result<()> {
+        unsafe {
+            ManuallyDrop::drop(&mut self.mmap);
+        }
+        if self.delete_on_close.load(Ordering::Relaxed) {
+            fs::remove_file(&self.path)?;
+        }
+        
+        Ok(())
+    }
+}
+
+impl Drop for Wal {
+    fn drop(&mut self) {
+        no_fail(self.drop_no_fail(), "drop wal");
     }
 }
 
@@ -184,7 +206,7 @@ impl<'a> Iterator for WalIterator<'a> {
         } else {
             let item = Entry::read_mmap(self.index_bytes, &self.wal.mmap);
 
-            // todo: might not be the best place. Do we need it in all cases of iteration?
+            // might not be the best place. Do we need it in all cases of iteration?
             if item.is_absent() {
                 // restore write position
                 self.wal.write_at = self.index_bytes;

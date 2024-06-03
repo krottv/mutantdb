@@ -92,21 +92,21 @@ impl Core {
         let _res = self.sx.send(());
     }
     
-    pub fn get(&self, key: &Key) -> Result<ValObj> {
+    pub fn get(&self, key: &Key) -> Option<ValObj> {
         {
             if let Some(memtable_val) = self.memtables.read().unwrap().get(key) {
                 if memtable_val.meta == META_DELETE {
-                    return Err(AbsentKey)
+                    return None
                 }
-                return Ok(memtable_val.clone());
+                return Some(memtable_val.clone());
             }
         }
         
         let levels_val_res = self.levels.get(key);
-        if levels_val_res.is_ok() {
+        if levels_val_res.is_some() {
             let v = levels_val_res.as_ref().unwrap();
             if v.meta == META_DELETE {
-                return Err(AbsentKey)
+                return None
             }
         }
         

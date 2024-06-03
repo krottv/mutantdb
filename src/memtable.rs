@@ -216,8 +216,8 @@ impl Memtables {
     }
 
     pub fn pop_front(&mut self) -> Result<()> {
-        if let Some(popped) = self.immutables.pop_front() {
-            popped.wal.delete()?;
+        if let Some(_popped) = self.immutables.pop_front() {
+            
         } else {
             panic!("can't pop items of len 0")
         }

@@ -155,6 +155,7 @@ name = "mutantdb"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "log",
  "memmap2",
  "once_cell",
  "prost",

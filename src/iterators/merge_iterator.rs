@@ -219,8 +219,8 @@ mod tests {
         let e4 = new_entry(4, 4);
 
         let sstable = create_sstable(&tmp_dir, Arc::new(opts), vec![e4.clone(), e3.clone(), e2.clone(), e1.clone()], 1);
-        let iter = SSTableIterator::new(Arc::new(sstable));
-        let mut merge_iter = MergeIterator::new(vec![], entry_comparator);
+        let iter = Box::new(SSTableIterator::new(Arc::new(sstable)));
+        let mut merge_iter = MergeIterator::new(vec![iter], entry_comparator);
 
         assert_eq!(merge_iter.next(), Some(e1));
         assert_eq!(merge_iter.next(), Some(e2));
@@ -241,8 +241,8 @@ mod tests {
         let sstable1 = create_sstable(&tmp_dir, opts.clone(),vec![], 1);
         let sstable2 = create_sstable(&tmp_dir, opts.clone(),vec![], 2);
 
-        let iter1 = SSTableIterator::new(Arc::new(sstable1));
-        let iter2 = SSTableIterator::new(Arc::new(sstable2));
+        let iter1 = Box::new(SSTableIterator::new(Arc::new(sstable1)));
+        let iter2 = Box::new(SSTableIterator::new(Arc::new(sstable2)));
 
         let mut merge_iter = MergeIterator::new(vec![iter1, iter2], entry_comparator);
 
@@ -267,8 +267,8 @@ mod tests {
         let sstable1 = Arc::new(create_sstable(&tmp_dir, opts.clone(), vec![e1.clone(), e3.clone()], 1));
         let sstable2 = Arc::new(create_sstable(&tmp_dir, opts.clone(), vec![e2.clone(), e4.clone()], 2));
 
-        let mut iter1 = SSTableIterator::new(sstable1.clone());
-        let mut iter2 = SSTableIterator::new(sstable2.clone());
+        let mut iter1 = Box::new(SSTableIterator::new(sstable1.clone()));
+        let mut iter2 = Box::new(SSTableIterator::new(sstable2.clone()));
 
         assert_eq!(iter1.next(), Some(e1.clone()));
         assert_eq!(iter1.next(), Some(e3.clone()));
@@ -278,8 +278,8 @@ mod tests {
         assert_eq!(iter2.next(), Some(e4.clone()));
         assert_eq!(iter2.next(), None);
 
-        iter1 = SSTableIterator::new(sstable1.clone());
-        iter2 = SSTableIterator::new(sstable2.clone());
+        iter1 = Box::new(SSTableIterator::new(sstable1.clone()));
+        iter2 = Box::new(SSTableIterator::new(sstable2.clone()));
 
         let mut merge_iter = MergeIterator::new(vec![iter1, iter2], entry_comparator);
 
@@ -308,8 +308,8 @@ mod tests {
         let sstable1 = Arc::new(create_sstable(&tmp_dir, opts.clone(), vec![e1.clone(), e3.clone()], 1));
         let sstable2 = Arc::new(create_sstable(&tmp_dir, opts.clone(), vec![e2.clone(), e4.clone()], 2));
 
-        let iter1 = SSTableIterator::new(sstable1);
-        let iter2 = SSTableIterator::new(sstable2);
+        let iter1 = Box::new(SSTableIterator::new(sstable1));
+        let iter2 = Box::new(SSTableIterator::new(sstable2));
 
         let mut merge_iter = MergeIterator::new(vec![iter1, iter2], entry_comparator);
 
@@ -336,8 +336,8 @@ mod tests {
         let sstable1 = Arc::new(create_sstable(&tmp_dir, opts.clone(),vec![e1.clone(), e2.clone()], 1));
         let sstable2 = Arc::new(create_sstable(&tmp_dir, opts.clone(),vec![], 2));
 
-        let iter1 = SSTableIterator::new(sstable1);
-        let iter2 = SSTableIterator::new(sstable2);
+        let iter1 = Box::new(SSTableIterator::new(sstable1));
+        let iter2 = Box::new(SSTableIterator::new(sstable2));
 
         let mut merge_iter = MergeIterator::new(vec![iter1, iter2], entry_comparator);
 

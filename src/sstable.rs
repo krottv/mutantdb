@@ -1,9 +1,12 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::mem::ManuallyDrop;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic;
 
 use bytes::Bytes;
 use memmap2::Mmap;
@@ -14,6 +17,7 @@ use proto::meta::{BlockIndex, TableIndex};
 use crate::entry::Entry;
 use crate::errors::Result;
 use crate::opts::DbOptions;
+use crate::util::no_fail;
 
 /**
 Format on disk
@@ -32,12 +36,14 @@ blocks_size: 8 bytes
 pub struct SSTable {
     pub index: TableIndex,
     // cache for blocks. Simpler then hashmap based
-    pub mmap: Mmap,
+    // manually drop because we need to drop it before deleting file to prevent errors
+    pub mmap: ManuallyDrop<Mmap>,
     pub file_path: PathBuf,
     opts: Arc<DbOptions>,
     pub first_key: Bytes,
     pub last_key: Bytes,
     pub size_on_disk: u64,
+    pub delete_on_drop: atomic::AtomicBool
 }
 /*
 You still need an in-memory index to tell you the offsets for some of the keys, 
@@ -64,7 +70,7 @@ impl SSTable {
                         size_on_disk: u64) -> Result<SSTable> {
         unsafe {
             let file = File::open(&file_path)?;
-            let mmap = Mmap::map(&file)?;
+            let mmap = ManuallyDrop::new(Mmap::map(&file)?);
 
             let mut sstable = SSTable {
                 index,
@@ -74,6 +80,7 @@ impl SSTable {
                 first_key: Bytes::new(),
                 last_key: Bytes::new(),
                 size_on_disk,
+                delete_on_drop: atomic::AtomicBool::new(false)
             };
             sstable.init_first_last_keys();
             return Ok(sstable);
@@ -232,6 +239,28 @@ impl SSTable {
         let s = format!("{id:}.mem");
         PathBuf::from(s)
     }
+
+    pub fn mark_delete(&self) {
+        self.delete_on_drop.store(true, atomic::Ordering::Relaxed);
+    }
+
+    fn drop_no_fail(&mut self) -> Result<()> {
+        unsafe {
+            ManuallyDrop::drop(&mut self.mmap);
+        }
+        
+        if self.delete_on_drop.load(atomic::Ordering::Relaxed) {
+            fs::remove_file(&self.file_path)?;
+        }
+        
+        Ok(())
+    }
+}
+
+impl Drop for SSTable {
+    fn drop(&mut self) {
+        no_fail(self.drop_no_fail(), format!("Drop sstable").as_str())
+    }
 }
 
 /*
@@ -244,20 +273,22 @@ Test cases:
  */
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::mem::ManuallyDrop;
+    use std::sync::{Arc, atomic};
+
     use bytes::Bytes;
     use memmap2::MmapOptions;
     use tempfile::tempdir;
 
     use proto::meta::{BlockIndex, TableIndex};
 
+    use crate::builder::Builder;
     use crate::comparator::BytesI32Comparator;
     use crate::entry;
     use crate::entry::{Entry, ValObj};
+    use crate::iterators::sstable_iterator::SSTableIterator;
     use crate::memtable::Memtable;
     use crate::opts::DbOptions;
-    use crate::builder::Builder;
-    use crate::iterators::sstable_iterator::SSTableIterator;
     use crate::sstable::SSTable;
 
     #[test]
@@ -513,12 +544,13 @@ mod tests {
 
         let sstable = SSTable {
             index: table_index,
-            mmap: MmapOptions::new().map_anon().unwrap().make_read_only().unwrap(),
+            mmap: ManuallyDrop::new(MmapOptions::new().map_anon().unwrap().make_read_only().unwrap()),
             file_path: sstable_path,
             opts: opts,
             first_key: Bytes::from(0i32.to_be_bytes().to_vec()),
             last_key: Bytes::from(28i32.to_be_bytes().to_vec()),
-            size_on_disk: 0
+            size_on_disk: 0,
+            delete_on_drop: atomic::AtomicBool::new(false)
         };
 
         let mut key = Bytes::from(16i32.to_be_bytes().to_vec());
