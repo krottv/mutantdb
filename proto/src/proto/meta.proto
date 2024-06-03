@@ -17,6 +17,4 @@ message TableIndex {
   repeated BlockIndex blocks = 1;
   uint64 max_version = 2;
   uint64 key_count = 3;
-  bytes first_key = 4;
-  bytes last_key = 5;
 }

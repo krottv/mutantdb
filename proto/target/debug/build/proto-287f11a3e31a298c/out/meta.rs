@@ -19,8 +19,4 @@ pub struct TableIndex {
     pub max_version: u64,
     #[prost(uint64, tag = "3")]
     pub key_count: u64,
-    #[prost(bytes = "vec", tag = "4")]
-    pub first_key: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "5")]
-    pub last_key: ::prost::alloc::vec::Vec<u8>,
 }

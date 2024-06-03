@@ -190,8 +190,7 @@ impl Memtables {
 
     /**
     1. move mutable to immutable
-    2. flush its wal
-    3. create new mutable
+    2. create new mutable
      */
     pub fn freeze_last(&mut self) -> Result<()> {
         if self.mutable.size() == 0 {
@@ -199,6 +198,8 @@ impl Memtables {
         }
 
         let new_id = self.mutable.id + 1;
+        //todo: we can add fine grained locks. No need to lock memtables
+        // while creation of new is in process.
         let new_memtable = Memtable::new(new_id, self.next_path(), self.opts.clone())?;
 
         let old_memtable = std::mem::replace(&mut self.mutable, new_memtable);
@@ -355,7 +356,9 @@ mod tests {
         let mut memtables = Memtables::open(opts.clone()).unwrap();
         
         memtables.add(e1.clone()).unwrap();
+        memtables.freeze_last().unwrap();
         memtables.add(e2.clone()).unwrap();
+        memtables.freeze_last().unwrap();
         memtables.add(e3.clone()).unwrap();
         
         assert_eq!(memtables.immutables.len(), 2);

@@ -21,13 +21,13 @@ pub mod builder;
 /**
 Format on disk
 
-blocks_size: 8 bytes
-----
 list blocks (arbitrary size)
 ----
 index_size: 8 bytes
 ---
 Table index (arbitrary size)
+----
+blocks_size: 8 bytes
 
  */
 
@@ -39,7 +39,8 @@ pub struct SSTable {
     pub file_path: PathBuf,
     opts: Arc<DbOptions>,
     pub first_key: Bytes,
-    pub last_key: Bytes
+    pub last_key: Bytes,
+    pub size_on_disk: u64,
 }
 /*
 You still need an in-memory index to tell you the offsets for some of the keys, 
@@ -58,23 +59,27 @@ pub struct Block {
 }
 
 impl SSTable {
-    pub fn from_builder(index: TableIndex, file_path: PathBuf, opts: Arc<DbOptions>) -> Result<SSTable> {
+    //todo: if creating from memtable, then first_key and last_key can be obtained from SkipList in O(1) time
+    // without IO
+    pub fn from_builder(index: TableIndex,
+                        file_path: PathBuf,
+                        opts: Arc<DbOptions>,
+                        size_on_disk: u64) -> Result<SSTable> {
         unsafe {
             let file = File::open(&file_path)?;
             let mmap = Mmap::map(&file)?;
-            let first_key = Bytes::copy_from_slice(&index.first_key);
-            let last_key = Bytes::copy_from_slice(&index.last_key);
 
-            return Ok(
-                SSTable {
-                    index,
-                    mmap,
-                    file_path,
-                    opts,
-                    first_key,
-                    last_key,
-                }
-            );
+            let mut sstable = SSTable {
+                index,
+                mmap,
+                file_path,
+                opts,
+                first_key: Bytes::new(),
+                last_key: Bytes::new(),
+                size_on_disk,
+            };
+            sstable.init_first_last_keys();
+            return Ok(sstable);
         }
     }
 
@@ -88,21 +93,23 @@ impl SSTable {
      */
     pub fn open(file_path: PathBuf, opts: Arc<DbOptions>) -> Result<SSTable> {
         let file = File::open(&file_path)?;
+        let file_size = file.metadata()?.len();
         let mut reader = BufReader::new(file);
 
-        // Read the first 8 bytes to get the blocks size
+        // Read the last 8 bytes from footer
+        reader.seek(SeekFrom::Start(file_size - 8))?;
         let mut blocks_size_bytes = [0u8; 8];
         reader.read_exact(&mut blocks_size_bytes)?;
         let blocks_size = u64::from_be_bytes(blocks_size_bytes);
 
         // Seek to the position of the index size and read the next 8 bytes
-        reader.seek(SeekFrom::Start(blocks_size + 8))?;
+        reader.seek(SeekFrom::Start(blocks_size))?;
         let mut index_size_bytes = [0u8; 8];
         reader.read_exact(&mut index_size_bytes)?;
         let index_size = u64::from_be_bytes(index_size_bytes);
 
         // Seek to the start of the index and read the index data
-        let index_start = blocks_size + 16;
+        let index_start = blocks_size + 8;
         reader.seek(SeekFrom::Start(index_start))?;
 
         let mut index_data = vec![0u8; index_size as usize];
@@ -110,8 +117,23 @@ impl SSTable {
 
         let buf = Bytes::from(index_data);
         let index = TableIndex::decode(buf)?;
+        
+        let size_on_disk = reader.stream_position()?;
 
-        return Self::from_builder(index, file_path, opts);
+        return Self::from_builder(index, file_path, opts, size_on_disk);
+    }
+    
+    pub fn init_first_last_keys(&mut self) {
+        if self.index.blocks.is_empty() {
+            return
+        }
+        
+        // unwrap because size is guaranteed to be non 0
+        let mut first_block = self.get_block(self.index.blocks.get(0).unwrap());
+        self.first_key = first_block.entries.pop_front().unwrap().key;
+        
+        let mut last_block = self.get_block(self.index.blocks.get(self.index.blocks.len() - 1).unwrap());
+        self.last_key = last_block.entries.pop_back().unwrap().key;
     }
 
     // binary search. 
@@ -121,15 +143,15 @@ impl SSTable {
     //        ^
     pub fn bsearch_block_index(&self, key: &Bytes) -> Option<&BlockIndex> {
         if self.opts.key_comparator.compare(key, &self.first_key).is_lt() {
-            return None
+            return None;
         } else if self.opts.key_comparator.compare(key, &self.last_key).is_gt() {
-            return None
+            return None;
         } else if self.index.blocks.len() == 0 {
-            return None
+            return None;
         }
 
         let mut left = 0;
-        let mut right = self.index.blocks.len()-1;
+        let mut right = self.index.blocks.len() - 1;
         let mut res: usize = 0;
         let mut initialized = false;
 
@@ -137,6 +159,7 @@ impl SSTable {
             let mid = (left as i64 + (right as i64 - left as i64) / 2) as usize;
             //todo: clone here is unnecessary copying of bytes. But how to avoid?
             // make comparator operate on vec? But fucking generics are weird.
+            // possible with asRef if was a concrete type
             let mid_bytes = Bytes::from(self.index.blocks[mid].key.clone());
             let ord = self.opts.key_comparator.compare(&mid_bytes, key);
 
@@ -152,7 +175,7 @@ impl SSTable {
                 Ordering::Greater => {
                     // attempt to subtract with overflow
                     if mid == 0 {
-                        break
+                        break;
                     } else {
                         right = mid - 1;
                     }
@@ -207,7 +230,7 @@ impl SSTable {
 
         return None;
     }
-    
+
     pub fn create_path(id: usize) -> PathBuf {
         let s = format!("{id:}.mem");
         PathBuf::from(s)
@@ -274,17 +297,18 @@ mod tests {
         assert_eq!(&e1, &block.entries[0]);
         assert_eq!(&e2, &block.entries[1]);
         assert_eq!(&e3, &block.entries[2]);
-        
-        assert_eq!(&sstable.index.first_key, &e1.key.to_vec());
-        assert_eq!(&sstable.index.last_key, &e3.key.to_vec());
+
+        assert_eq!(&sstable.first_key, &e1.key.to_vec());
+        assert_eq!(&sstable.last_key, &e3.key.to_vec());
 
         assert_eq!(sstable.index.blocks.len(), 1);
+        assert_eq!(&sstable.index.blocks.get(0).unwrap().key, &e1.key.to_vec());
         assert_eq!(&e3, &sstable.find_entry(&e3.key).unwrap());
         assert_eq!(&e2, &sstable.find_entry(&e2.key).unwrap());
         assert_eq!(&e1, &sstable.find_entry(&e1.key).unwrap());
         let absent_key = Bytes::from("key4");
-        assert_eq!(None, sstable.find_entry(&absent_key));     
-        
+        assert_eq!(None, sstable.find_entry(&absent_key));
+
         // iterator
         let mut iterator = SSTableIterator::new(&sstable);
 
@@ -293,7 +317,7 @@ mod tests {
         assert_eq!(Some(e3), iterator.next());
         assert_eq!(None, iterator.next());
     }
-    
+
     #[test]
     fn many_blocks() {
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), entry::META_ADD);
@@ -322,29 +346,32 @@ mod tests {
         memtable.add(e3.clone()).unwrap();
 
         let sstable = Builder::build_from_memtable(&memtable, sstable_path, opts).unwrap();
-        
+
         assert_eq!(sstable.index.blocks.len(), 3);
-        assert_eq!(&sstable.index.first_key, &e1.key.to_vec());
-        assert_eq!(&sstable.index.last_key, &e3.key.to_vec());
-        
+        assert_eq!(&sstable.first_key, &e1.key.to_vec());
+        assert_eq!(&sstable.last_key, &e3.key.to_vec());
+
         let block0 = sstable.get_block(&sstable.index.blocks[0]);
+        assert_eq!(&sstable.index.blocks[0].key, &e1.key.to_vec());
         assert_eq!(block0.entries.len(), 1);
         assert_eq!(&e1, &block0.entries[0]);
-        
+
         let block1 = sstable.get_block(&sstable.index.blocks[1]);
+        assert_eq!(&sstable.index.blocks[1].key, &e2.key.to_vec());
         assert_eq!(block1.entries.len(), 1);
         assert_eq!(&e2, &block1.entries[0]);
-        
+
         let block2 = sstable.get_block(&sstable.index.blocks[2]);
+        assert_eq!(&sstable.index.blocks[2].key, &e3.key.to_vec());
         assert_eq!(block2.entries.len(), 1);
         assert_eq!(&e3, &block2.entries[0]);
-        
+
         assert_eq!(&e3, &sstable.find_entry(&e3.key).unwrap());
         assert_eq!(&e2, &sstable.find_entry(&e2.key).unwrap());
         assert_eq!(&e1, &sstable.find_entry(&e1.key).unwrap());
         let absent_key = Bytes::from("key4");
         assert_eq!(None, sstable.find_entry(&absent_key));
-        
+
         // iterator
         let mut iterator = SSTableIterator::new(&sstable);
 
@@ -387,12 +414,78 @@ mod tests {
         sstable = SSTable::open(sstable_path, opts).unwrap();
         let block = sstable.get_block(&sstable.index.blocks[0]);
 
+        assert_eq!(&sstable.index.blocks.get(0).unwrap().key, &e1.key.to_vec());
         assert_eq!(block.entries.len(), 3);
         assert_eq!(&e1, &block.entries[0]);
         assert_eq!(&e2, &block.entries[1]);
         assert_eq!(&e3, &block.entries[2]);
     }
 
+
+    #[test]
+    fn many_blocks_reopen() {
+        let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), entry::META_ADD);
+        let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), entry::META_ADD);
+        let e3 = Entry {
+            key: Bytes::from("3key"),
+            val_obj: ValObj {
+                value: Bytes::from("value3"),
+                meta: 10,
+                user_meta: 15,
+                version: 1000,
+            },
+        };
+        let tmp_dir = tempdir().unwrap();
+        let wal_path = tmp_dir.path().join("1.wal");
+        let sstable_path = tmp_dir.path().join("1.mem");
+        let opts = Arc::new(DbOptions {
+            max_wal_size: 1000,
+            block_max_size: 1,
+            ..Default::default()
+        });
+
+        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
+        memtable.add(e1.clone()).unwrap();
+        memtable.add(e2.clone()).unwrap();
+        memtable.add(e3.clone()).unwrap();
+
+        let mut sstable = Builder::build_from_memtable(&memtable, sstable_path.clone(), opts.clone()).unwrap();
+        drop(sstable);
+        sstable = SSTable::open(sstable_path, opts.clone()).unwrap();
+
+        assert_eq!(sstable.index.blocks.len(), 3);
+        assert_eq!(&sstable.first_key, &e1.key.to_vec());
+        assert_eq!(&sstable.last_key, &e3.key.to_vec());
+
+        let block0 = sstable.get_block(&sstable.index.blocks[0]);
+        assert_eq!(&sstable.index.blocks[0].key, &e1.key.to_vec());
+        assert_eq!(block0.entries.len(), 1);
+        assert_eq!(&e1, &block0.entries[0]);
+
+        let block1 = sstable.get_block(&sstable.index.blocks[1]);
+        assert_eq!(&sstable.index.blocks[1].key, &e2.key.to_vec());
+        assert_eq!(block1.entries.len(), 1);
+        assert_eq!(&e2, &block1.entries[0]);
+
+        let block2 = sstable.get_block(&sstable.index.blocks[2]);
+        assert_eq!(&sstable.index.blocks[2].key, &e3.key.to_vec());
+        assert_eq!(block2.entries.len(), 1);
+        assert_eq!(&e3, &block2.entries[0]);
+
+        assert_eq!(&e3, &sstable.find_entry(&e3.key).unwrap());
+        assert_eq!(&e2, &sstable.find_entry(&e2.key).unwrap());
+        assert_eq!(&e1, &sstable.find_entry(&e1.key).unwrap());
+        let absent_key = Bytes::from("key4");
+        assert_eq!(None, sstable.find_entry(&absent_key));
+
+        // iterator
+        let mut iterator = SSTableIterator::new(&sstable);
+
+        assert_eq!(Some(e1), iterator.next());
+        assert_eq!(Some(e2), iterator.next());
+        assert_eq!(Some(e3), iterator.next());
+        assert_eq!(None, iterator.next());
+    }
 
     #[test]
     fn search_block_index() {
@@ -403,7 +496,7 @@ mod tests {
             block_indexes.push(BlockIndex {
                 key: (key as i32).to_be_bytes().to_vec(),
                 offset: i as u64,
-                len: i as u32
+                len: i as u32,
             });
         }
 
@@ -416,8 +509,6 @@ mod tests {
             blocks: block_indexes.clone(),
             max_version: 0,
             key_count: 0,
-            first_key: 0i32.to_be_bytes().to_vec(),
-            last_key: 28i32.to_be_bytes().to_vec()
         };
         let tmp_dir = tempdir().unwrap();
         let sstable_path = tmp_dir.path().join("1.mem");
@@ -429,12 +520,13 @@ mod tests {
             file_path: sstable_path,
             opts: opts,
             first_key: Bytes::from(0i32.to_be_bytes().to_vec()),
-            last_key: Bytes::from(28i32.to_be_bytes().to_vec())
+            last_key: Bytes::from(28i32.to_be_bytes().to_vec()),
+            size_on_disk: 0
         };
 
         let mut key = Bytes::from(16i32.to_be_bytes().to_vec());
         assert_eq!(sstable.bsearch_block_index(&key), Some(&block_indexes[4]));
-        
+
         key = Bytes::from(18i32.to_be_bytes().to_vec());
         assert_eq!(sstable.bsearch_block_index(&key), Some(&block_indexes[4]));
 
@@ -449,6 +541,5 @@ mod tests {
 
         key = Bytes::from(29i32.to_be_bytes().to_vec());
         assert_eq!(sstable.bsearch_block_index(&key), None);
-
     }
 }

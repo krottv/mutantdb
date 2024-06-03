@@ -1,6 +1,6 @@
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, RwLock};
-use std::thread;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use bytes::Bytes;
 use crate::levels::LevelsController;
 use crate::entry::{Entry, Key, META_ADD, META_DELETE, ValObj};
@@ -18,7 +18,8 @@ pub struct Core {
     memtables: RwLock<Memtables>,
     sx: Sender<()>,
     rx: Receiver<()>,
-    logger: Box<dyn Logger>
+    logger: Box<dyn Logger>,
+    id_generator: SSTableIdGenerator
 }
 
 impl Core {
@@ -48,7 +49,7 @@ impl Core {
         }
         {
             if let Some(memtable) = self.memtables.read().unwrap().get_first() {
-                let sstable_path = SSTable::create_path(memtable.id);
+                let sstable_path = SSTable::create_path(self.id_generator.get_new());
                 let sstable = Builder::build_from_memtable(memtable, sstable_path, self.opts.clone())?;
                 self.levels.add_to_l0(sstable)?;
                 
@@ -110,5 +111,24 @@ impl Core {
         }
         
         return levels_val_res;
+    }
+}
+
+
+#[derive(Clone)]
+pub struct SSTableIdGenerator {
+    last_id: Arc<AtomicUsize>
+}
+
+impl SSTableIdGenerator {
+    pub fn new(id: usize) -> Self {
+        SSTableIdGenerator {
+            last_id: Arc::new(AtomicUsize::new(id))
+        }
+    }
+    
+    pub fn get_new(&self) -> usize {
+        let prev = self.last_id.fetch_add(1, Ordering::Relaxed);
+        return prev + 1;
     }
 }

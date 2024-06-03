@@ -37,3 +37,26 @@ impl Default for DbOptions {
         }
     }
 }
+
+// todo: validate creation. For example levels can't be < 2
+pub struct LevelsOptions {
+    pub level_max_size: u64,
+    
+    // second_level_max_size = next_level_size_multiple * level_max_size
+    pub next_level_size_multiple: u32,
+    
+    pub num_levels: u32
+}
+
+impl Default for LevelsOptions {
+    fn default() -> Self {
+        LevelsOptions {
+            // 20 mb
+            level_max_size: 200000,
+            
+            next_level_size_multiple: 10,
+            
+            num_levels: 7
+        }
+    }
+}
