@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use memmap2::MmapMut;
@@ -184,19 +185,19 @@ impl Entry {
     }
 }
 
-pub struct EntryComparator<'a> {
-    inner: &'a dyn KeyComparator<Bytes>
+pub struct EntryComparator {
+    inner: Arc<dyn KeyComparator<Bytes>>
 }
 
-impl<'a> EntryComparator<'a> {
-    pub fn new(inner: &'a dyn KeyComparator<Bytes>) -> Self {
+impl EntryComparator {
+    pub fn new(inner: Arc<dyn KeyComparator<Bytes>>) -> Self {
         EntryComparator {
             inner
         }
     }
 }
 
-impl<'a> KeyComparator<Entry> for EntryComparator<'a> {
+impl KeyComparator<Entry> for EntryComparator {
     fn compare(&self, compare: &Entry, another: &Entry) -> Ordering {
         self.inner.compare(&compare.key, &another.key)
     }

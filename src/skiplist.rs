@@ -1,17 +1,17 @@
+use std::cmp::Ordering;
+use std::ptr::null_mut;
+use std::sync::Arc;
+
+use crate::comparator::KeyComparator;
+use crate::skiplist::coinflipper::{CoinFlipper, CoinFlipperRand};
+use crate::skiplist::skipnode::SkipNode;
+use crate::skiplist::skipvalue::SkipData;
+
 mod coinflipper;
 mod skipnode;
 mod skipvalue;
 mod skipiterator;
 mod skiplist_test;
-
-use std::cmp::Ordering;
-use crate::skiplist::coinflipper::{CoinFlipper, CoinFlipperHash, CoinFlipperRand};
-use crate::skiplist::skipnode::SkipNode;
-use crate::skiplist::skipvalue::SkipData;
-
-use std::ptr::null_mut;
-use std::sync::Arc;
-use crate::comparator::KeyComparator;
 
 type NodePtr<KEY, VALUE> = *mut SkipNode<SkipEntry<KEY, VALUE>>;
 type Comparator<KEY> = Arc<dyn KeyComparator<KEY>>;

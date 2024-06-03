@@ -34,14 +34,14 @@ impl Builder {
                opts: Arc<DbOptions>,
                max_block_size: usize,
     ) -> Result<Self> {
-        let mut index = TableIndex::default();
+        let index = TableIndex::default();
         let file = File::options()
             .read(true)
             .write(true)
             .create(true)
             .open(&file_path)?;
 
-        let mut writer = BufWriter::new(file);
+        let writer = BufWriter::new(file);
         let buffer = BytesMut::with_capacity(max_block_size);
 
         Ok(Builder {

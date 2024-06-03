@@ -9,7 +9,7 @@ use crate::memtable::Memtables;
 use crate::opts::DbOptions;
 use crate::errors::Result;
 use crate::logger::Logger;
-use crate::sstable::builder::Builder;
+use crate::builder::Builder;
 use crate::sstable::SSTable;
 
 pub struct Core {

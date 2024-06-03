@@ -15,9 +15,6 @@ use crate::entry::Entry;
 use crate::errors::Result;
 use crate::opts::DbOptions;
 
-pub mod sstable_iterator;
-pub mod builder;
-
 /**
 Format on disk
 
@@ -259,9 +256,9 @@ mod tests {
     use crate::entry::{Entry, ValObj};
     use crate::memtable::Memtable;
     use crate::opts::DbOptions;
-    use crate::sstable::builder::Builder;
+    use crate::builder::Builder;
+    use crate::iterators::sstable_iterator::SSTableIterator;
     use crate::sstable::SSTable;
-    use crate::sstable::sstable_iterator::SSTableIterator;
 
     #[test]
     fn basic_create() {
@@ -310,7 +307,7 @@ mod tests {
         assert_eq!(None, sstable.find_entry(&absent_key));
 
         // iterator
-        let mut iterator = SSTableIterator::new(&sstable);
+        let mut iterator = SSTableIterator::new(Arc::new(sstable));
 
         assert_eq!(Some(e1), iterator.next());
         assert_eq!(Some(e2), iterator.next());
@@ -373,7 +370,7 @@ mod tests {
         assert_eq!(None, sstable.find_entry(&absent_key));
 
         // iterator
-        let mut iterator = SSTableIterator::new(&sstable);
+        let mut iterator = SSTableIterator::new(Arc::new(sstable));
 
         assert_eq!(Some(e1), iterator.next());
         assert_eq!(Some(e2), iterator.next());
@@ -479,7 +476,7 @@ mod tests {
         assert_eq!(None, sstable.find_entry(&absent_key));
 
         // iterator
-        let mut iterator = SSTableIterator::new(&sstable);
+        let mut iterator = SSTableIterator::new(Arc::new(sstable));
 
         assert_eq!(Some(e1), iterator.next());
         assert_eq!(Some(e2), iterator.next());

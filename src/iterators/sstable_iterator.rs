@@ -1,14 +1,15 @@
+use std::sync::Arc;
 use crate::entry::Entry;
 use crate::sstable::{Block, SSTable};
 
-pub struct SSTableIterator<'a> {
-    sstable: &'a SSTable,
+pub struct SSTableIterator {
+    sstable: Arc<SSTable>,
     block: Option<Block>,
     block_position: usize
 }
 
-impl<'a> SSTableIterator<'a> {
-    pub fn new(sstable: &'a SSTable) -> Self {
+impl SSTableIterator {
+    pub fn new(sstable: Arc<SSTable>) -> Self {
         SSTableIterator {
             sstable,
             block: None,
@@ -17,8 +18,7 @@ impl<'a> SSTableIterator<'a> {
     }
 }
 
-impl<'a> Iterator for SSTableIterator<'a> {
-    // we actually can return owned values
+impl Iterator for SSTableIterator {
     type Item = Entry;
 
     fn next(&mut self) -> Option<Self::Item> {
