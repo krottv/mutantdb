@@ -70,7 +70,6 @@ impl Core {
     }
 
     pub fn add(&self, key: Key, value: Bytes, user_meta: u8) -> Result<()> {
-        let inner_self = &self.inner;
         let val_obj = ValObj {
             value,
             meta: META_ADD,
@@ -78,11 +77,23 @@ impl Core {
             version: 0,
         };
 
-        let encoded_size = Entry::get_encoded_size(&key, &val_obj);
+        self.add_inner(key, val_obj)
+    }
+    
+    pub fn remove(&self, key: Bytes) -> Result<()> {
+        let val_obj = ValObj {
+            value: Bytes::new(),
+            meta: META_DELETE,
+            user_meta: 0,
+            version: 0,
+        };
 
-        let mut memtables = inner_self.memtables.write().unwrap();
-
-        if memtables.is_need_to_freeze(encoded_size) {
+        self.add_inner(key, val_obj)
+    }
+    
+    fn add_inner(&self, key: Key, val_obj: ValObj) -> Result<()> {
+        let mut memtables = self.inner.memtables.write().unwrap();
+        if memtables.is_need_to_freeze(Entry::get_encoded_size(&key, &val_obj)) {
             memtables.freeze_last()?;
             self.notify_memtable_freeze();
         }
@@ -291,6 +302,17 @@ mod tests {
             for i in 50..100 {
                 assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i * 10);
             }
+        }
+
+        for i in 50..100 {
+            core.remove(int_to_bytes(i)).unwrap()
+        }
+
+        for i in 1..50 {
+            assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);
+        }
+        for i in 50..100 {
+            assert_eq!(core.get(&int_to_bytes(i)), None);
         }
     }
 
