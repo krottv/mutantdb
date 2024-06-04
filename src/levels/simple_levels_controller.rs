@@ -37,15 +37,15 @@ impl Level {
     }
 }
 
-struct SimpleLevelsController {
-    id_generator: SSTableIdGenerator,
+pub struct SimpleLevelsController {
+    id_generator: Arc<SSTableIdGenerator>,
     level_opts: Arc<LevelsOptions>,
     db_opts: Arc<DbOptions>,
     levels: RwLock<Vec<Level>>,
 }
 
 impl SimpleLevelsController {
-    pub fn new_empty(id_generator: SSTableIdGenerator, level_opts: Arc<LevelsOptions>, db_opts: Arc<DbOptions>) -> Self {
+    pub fn new_empty(id_generator: Arc<SSTableIdGenerator>, level_opts: Arc<LevelsOptions>, db_opts: Arc<DbOptions>) -> Self {
         let mut levels = Vec::with_capacity(level_opts.num_levels as usize);
         for i in 0..level_opts.num_levels {
             levels.push(Level::new_empty(i));
@@ -199,7 +199,7 @@ impl SimpleLevelsController {
     }
 
     fn new_builder(&self) -> Result<Builder> {
-        let path = SSTable::create_path(self.id_generator.get_new());
+        let path = self.db_opts.sstables_path.join(SSTable::create_path(self.id_generator.get_new()));
         Builder::new(path, self.db_opts.clone(), self.db_opts.block_max_size as usize)
     }
 
@@ -307,7 +307,8 @@ mod tests {
         let db_opts = Arc::new(
             DbOptions::default()
         );
-        let controller = SimpleLevelsController::new_empty(SSTableIdGenerator::new(1), level_opts, db_opts);
+        let id_generator = Arc::new(SSTableIdGenerator::new(1));
+        let controller = SimpleLevelsController::new_empty(id_generator, level_opts, db_opts);
 
         let any_key = Bytes::from("key1");
         assert_eq!(controller.get(&any_key), None);
@@ -333,7 +334,8 @@ mod tests {
                 next_level_size_multiple: 1,
             }
         );
-        let controller = SimpleLevelsController::new_empty(SSTableIdGenerator::new(1), level_opts, db_opts.clone());
+        let id_generator = Arc::new(SSTableIdGenerator::new(1));
+        let controller = SimpleLevelsController::new_empty(id_generator, level_opts, db_opts.clone());
 
         let e1 = new_entry(1, 1);
         let e2 = new_entry(2, 2);
@@ -395,7 +397,8 @@ mod tests {
                 next_level_size_multiple: 1,
             }
         );
-        let controller = SimpleLevelsController::new_empty(SSTableIdGenerator::new(1), level_opts, db_opts.clone());
+        let id_generator = Arc::new(SSTableIdGenerator::new(1));
+        let controller = SimpleLevelsController::new_empty(id_generator, level_opts, db_opts.clone());
 
         let e1 = new_entry(1, 1);
         let e2 = new_entry(2, 2);
@@ -450,8 +453,8 @@ mod tests {
                 ..Default::default()
             }
         );
-        let id_generator = SSTableIdGenerator::new(1);
-        
+        let id_generator = Arc::new(SSTableIdGenerator::new(1));
+
         let e1 = new_entry(1, 1);
         let e2 = new_entry(2, 2);
         let e3 = new_entry(3, 3);
@@ -479,7 +482,7 @@ mod tests {
             }
         );
         let controller = SimpleLevelsController::new_empty(id_generator, level_opts, db_opts.clone());
-        
+
 
         controller.add_to_l0(sstable1).unwrap();
         controller.add_to_l0(sstable2).unwrap();

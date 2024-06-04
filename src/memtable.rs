@@ -203,7 +203,7 @@ impl Memtables {
         let new_memtable = Memtable::new(new_id, self.next_path(), self.opts.clone())?;
 
         let old_memtable = std::mem::replace(&mut self.mutable, new_memtable);
-        self.immutables.push_back(old_memtable);
+        self.immutables.push_front(old_memtable);
 
         return Ok(());
     }
@@ -339,7 +339,7 @@ mod tests {
     fn check_flush_works() {
         let e1 = Entry::new(Bytes::from("key1"), Bytes::from("value1"), entry::META_ADD);
         let e2 = Entry::new(Bytes::from("key2"), Bytes::from("value2"), entry::META_ADD);
-        let e3 = Entry::new(Bytes::from("key3"), Bytes::from("value3"), entry::META_ADD);
+        let e3 = Entry::new(Bytes::from("key2"), Bytes::from("value20"), entry::META_ADD);
         
         let comparator = BytesStringUtf8Comparator { };
         let tmp_dir = tempdir().unwrap().path().join("wals");
@@ -366,14 +366,14 @@ mod tests {
         assert_eq!(memtables.immutables[0].size(), 1);
         assert_eq!(memtables.immutables[1].size(), 1);
         assert_eq!(memtables.mutable.id, 3);
-        assert_eq!(memtables.immutables[1].id, 2);
-        assert_eq!(memtables.immutables[0].id, 1);
+        assert_eq!(memtables.immutables[1].id, 1);
+        assert_eq!(memtables.immutables[0].id, 2);
         
         drop(memtables);
         memtables = Memtables::open(opts).unwrap();
         
         assert_eq!(memtables.get(&e3.key), Some(&e3.val_obj));
-        assert_eq!(memtables.get(&e2.key), Some(&e2.val_obj));
+        assert_eq!(memtables.get(&e2.key), Some(&e3.val_obj));
         assert_eq!(memtables.get(&e1.key), Some(&e1.val_obj));
         assert_eq!(memtables.immutables.len(), 2);
         assert_eq!(memtables.mutable.size(), 1);

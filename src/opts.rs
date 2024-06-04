@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use bytes::Bytes;
 use crate::comparator::{BytesStringUtf8Comparator, KeyComparator};
+use crate::levels::CompactionStrategy;
 
 pub struct DbOptions {
     // in bytes. actual size can exceed this if single entry is bigger
@@ -15,7 +16,9 @@ pub struct DbOptions {
     
     pub sstables_path: PathBuf,
     
-    pub block_max_size: u32 
+    pub block_max_size: u32,
+    
+    pub compaction_strategy: CompactionStrategy
 }
 
 impl Default for DbOptions {
@@ -33,7 +36,9 @@ impl Default for DbOptions {
             sstables_path: PathBuf::from( "/"),
             
             // 4kb power of 2
-            block_max_size: 4096
+            block_max_size: 4096,
+            
+            compaction_strategy: CompactionStrategy::SimpleLeveled
         }
     }
 }
