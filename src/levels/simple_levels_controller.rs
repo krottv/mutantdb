@@ -258,6 +258,21 @@ impl LevelsController for SimpleLevelsController {
         let iter = self.get_iterator();
         Box::new(iter)
     }
+
+    fn get_sstable_count(&self, level_id: u32) -> Option<usize> {
+        let i = level_id as usize;
+        let levels = self.levels.read().unwrap();
+        levels.get(i).map(|x| {
+            x.run.len()
+        })
+    }
+
+    fn get_sstable_count_total(&self) -> usize {
+        self.levels.read().unwrap()
+            .iter().fold(0usize, |x, y| {
+            x + y.run.len()
+        })
+    }
 }
 
 /*

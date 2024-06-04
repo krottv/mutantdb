@@ -207,22 +207,26 @@ impl Memtables {
 
         return Ok(());
     }
-    pub fn get_first_mut(&mut self) -> Option<&mut Memtable> {
-        return self.immutables.get_mut(0)
+    pub fn get_back_mut(&mut self) -> Option<&mut Memtable> {
+        return self.immutables.back_mut()
     }
 
-    pub fn get_first(&self) -> Option<&Memtable> {
-        return self.immutables.get(0)
+    pub fn get_back(&self) -> Option<&Memtable> {
+        return self.immutables.back()
     }
 
-    pub fn pop_front(&mut self) -> Result<()> {
-        if let Some(_popped) = self.immutables.pop_front() {
+    pub fn pop_back(&mut self) -> Result<()> {
+        if let Some(_popped) = self.immutables.pop_back() {
             
         } else {
             panic!("can't pop items of len 0")
         }
 
         return Ok(());
+    }
+    
+    pub fn count(&self) -> usize {
+        return 1 + &self.immutables.len();
     }
 }
 

@@ -57,7 +57,7 @@ impl Core {
 
         spawn(move || {
             for _nothing in rx.iter() {
-                inner.compaction_job();
+                inner.do_compaction_no_fail();
             }
         })
     }
@@ -124,16 +124,16 @@ impl Core {
 
 impl InnerCore {
     // flushing is sequential for now
-    fn try_flush_memtable(&self) -> Result<()> {
+    fn do_compaction(&self) -> Result<()> {
         {
-            if let Some(memtable) = self.memtables.write().unwrap().get_first_mut() {
+            if let Some(memtable) = self.memtables.write().unwrap().get_back_mut() {
                 memtable.wal.truncate()?;
             } else {
                 return Err(IllegalState("memtable is absent in flush 1".to_string()));
             }
         }
         {
-            if let Some(memtable) = self.memtables.read().unwrap().get_first() {
+            if let Some(memtable) = self.memtables.read().unwrap().get_back() {
                 let sstable_path = self.db_opts.sstables_path.join(SSTable::create_path(self.id_generator.get_new()));
                 let sstable = Builder::build_from_memtable(memtable, sstable_path, self.db_opts.clone())?;
                 self.lcontroller.add_to_l0(sstable)?;
@@ -142,15 +142,15 @@ impl InnerCore {
             }
         }
         {
-            self.memtables.write().unwrap().pop_front()?
+            self.memtables.write().unwrap().pop_back()?
         }
 
         return Ok(());
     }
 
 
-    fn compaction_job(&self) {
-        let res = self.try_flush_memtable();
+    fn do_compaction_no_fail(&self) {
+        let res = self.do_compaction();
         if let Some(err) = res.err() {
             log::warn!("compaction error {}", err.to_string());
         }
@@ -162,7 +162,7 @@ Test cases:
  - add values in another thread.
  - check that all values are added and only the latest version of them is available
  - check that compaction happened and smth is present in levels
- 
+
  todo later:
  - check restoration (manifest)
  - check iterator
@@ -171,6 +171,8 @@ Test cases:
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::thread::sleep;
+    use std::time::Duration;
     use bytes::Bytes;
     use tempfile::tempdir;
     use crate::comparator::BytesI32Comparator;
@@ -179,16 +181,17 @@ mod tests {
 
     fn int_to_bytes(v: i32) -> Bytes {
         Bytes::from(v.to_be_bytes().to_vec())
-    } 
+    }
+
     fn bytes_to_int(b: Bytes) -> i32 {
         let mut arr = [0u8; 4];
         arr.copy_from_slice(&b);
-        
+
         i32::from_be_bytes(arr)
     }
 
     #[test]
-    fn add_many() {
+    fn add_many_with_thread() {
         let tmp_dir = tempdir().unwrap();
         let comparator = Arc::new(BytesI32Comparator {});
         let db_opts = Arc::new(
@@ -199,12 +202,14 @@ mod tests {
                 max_memtable_size: 1,
                 ..Default::default()
             }
-        );
+        );    
+        std::fs::create_dir_all(&db_opts.wal_path).unwrap();
+        std::fs::create_dir_all(&db_opts.sstables_path).unwrap();
         let level_opts = Arc::new(
             LevelsOptions {
-                level_max_size: 1,
+                level_max_size: 10000,
                 num_levels: 3,
-                next_level_size_multiple: 1,
+                next_level_size_multiple: 10,
             }
         );
 
@@ -219,14 +224,128 @@ mod tests {
             core.add(int_to_bytes(i), int_to_bytes(i * 10), 0).unwrap();
         }
 
-        // todo: wait for pending compactions to be finished. 
-        // in another test
+        //todo: wait for pending compactions to be finished instead of sleep.
+        // 100ms is not enough
+        sleep(Duration::from_millis(1000));
+
+        assert_eq!(core.inner.memtables.read().unwrap().count(), 1);
+        assert!(core.inner.lcontroller.get_sstable_count_total() >= 1);
 
         for i in 1..50 {
             assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);
         }
         for i in 50..100 {
             assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i * 10);
+        }
+    }
+
+    #[test]
+    fn add_many_manually_compact_one_big_level() {
+        let tmp_dir = tempdir().unwrap();
+        let comparator = Arc::new(BytesI32Comparator {});
+        let db_opts = Arc::new(
+            DbOptions {
+                wal_path: tmp_dir.path().join("wal"),
+                sstables_path: tmp_dir.path().join("mem"),
+                key_comparator: comparator,
+                max_memtable_size: 1,
+                ..Default::default()
+            }
+        );
+        std::fs::create_dir_all(&db_opts.wal_path).unwrap();
+        std::fs::create_dir_all(&db_opts.sstables_path).unwrap();
+        
+        let level_opts = Arc::new(
+            LevelsOptions {
+                level_max_size: 1000000,
+                num_levels: 3,
+                next_level_size_multiple: 10,
+            }
+        );
+
+        let core = Core::new(db_opts, level_opts).unwrap();
+
+        for i in 1..100 {
+            core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
+        }
+
+        for i in 50..100 {
+            core.add(int_to_bytes(i), int_to_bytes(i * 10), 0).unwrap();
+        }
+
+        let memtables_count = core.inner.memtables.read().unwrap().count();
+        assert!(memtables_count > 1);
+        assert_eq!(core.inner.lcontroller.get_sstable_count_total(), 0);
+
+        let mut iteration = 0usize;
+        while memtables_count < iteration {
+            iteration += 1;
+            core.inner.do_compaction().unwrap();
+            
+            assert_eq!(core.inner.memtables.read().unwrap().count(), memtables_count - iteration);
+            assert_eq!(core.inner.lcontroller.get_sstable_count_total(), 1);
+            
+            for i in 1..50 {
+                assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);
+            }
+            for i in 50..100 {
+                assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i * 10);
+            }
+        }
+    }
+
+    #[test]
+    fn add_many_manually_small_levels() {
+        let tmp_dir = tempdir().unwrap();
+        let comparator = Arc::new(BytesI32Comparator {});
+        let db_opts = Arc::new(
+            DbOptions {
+                wal_path: tmp_dir.path().join("wal"),
+                sstables_path: tmp_dir.path().join("mem"),
+                key_comparator: comparator,
+                max_memtable_size: 1,
+                ..Default::default()
+            }
+        );
+        std::fs::create_dir_all(&db_opts.wal_path).unwrap();
+        std::fs::create_dir_all(&db_opts.sstables_path).unwrap();
+
+        let level_opts = Arc::new(
+            LevelsOptions {
+                level_max_size: 1,
+                num_levels: 3,
+                next_level_size_multiple: 1,
+            }
+        );
+
+        let core = Core::new(db_opts, level_opts).unwrap();
+
+        for i in 1..100 {
+            core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
+        }
+
+        for i in 50..100 {
+            core.add(int_to_bytes(i), int_to_bytes(i * 10), 0).unwrap();
+        }
+
+        let memtables_count = core.inner.memtables.read().unwrap().count();
+        assert!(memtables_count > 1);
+        assert_eq!(core.inner.lcontroller.get_sstable_count_total(), 0);
+
+        let mut iteration = 0usize;
+        while memtables_count < iteration {
+            iteration += 1;
+            core.inner.do_compaction().unwrap();
+
+            assert_eq!(core.inner.memtables.read().unwrap().count(), memtables_count - iteration);
+            assert_eq!(core.inner.lcontroller.get_sstable_count_total(), iteration);
+
+            for i in 1..50 {
+                assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);
+            }
+            for i in 50..100 {
+                assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i * 10);
+            }
         }
     }
 }

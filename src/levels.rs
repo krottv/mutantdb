@@ -20,6 +20,9 @@ pub trait LevelsController: Send + Sync {
     fn add_to_l0(&self, sstable: SSTable) -> Result<()>;
     fn get(&self, key: &Key) -> Option<ValObj>;
     fn iter(&self) -> Box<dyn Iterator<Item=Entry>>;
+    fn get_sstable_count(&self, level_id: u32) -> Option<usize>;
+    
+    fn get_sstable_count_total(&self) -> usize;
 }
 
 pub enum CompactionStrategy {
