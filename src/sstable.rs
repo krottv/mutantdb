@@ -292,7 +292,7 @@ pub(crate) mod tests {
     pub(crate) fn create_sstable<'a>(tmp_dir: &TempDir, opts: Arc<DbOptions>, entries: Vec<Entry>, id: usize) -> SSTable {
         let sstable_path = tmp_dir.path().join(format!("{id:}.mem"));
         let wal_path = tmp_dir.path().join(format!("{id:}.wal"));
-        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
+        let memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
         for entry in entries {
             memtable.add(entry).unwrap();
         }
@@ -329,7 +329,7 @@ pub(crate) mod tests {
             ..Default::default()
         });
 
-        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
+        let memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
         memtable.add(e1.clone()).unwrap();
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
@@ -388,7 +388,7 @@ pub(crate) mod tests {
             ..Default::default()
         });
 
-        let mut memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
+        let memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
         memtable.add(e1.clone()).unwrap();
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();

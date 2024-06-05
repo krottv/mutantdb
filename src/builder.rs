@@ -119,11 +119,12 @@ impl Builder {
     pub fn build_from_memtable(mem: &Memtable,
                                file_path: PathBuf,
                                opts: Arc<DbOptions>, ) -> Result<SSTable> {
-        let max_block_size = max(opts.block_max_size, mem.inner.compute_max_entry_size() as u32);
+        let mem_inner = mem.inner.read().unwrap();
+        let max_block_size = max(opts.block_max_size, mem_inner.compute_max_entry_size() as u32);
 
         let mut builder = Builder::new(file_path, opts, max_block_size as usize)?;
 
-        for entry in mem.inner.skiplist.into_iter() {
+        for entry in mem_inner.skiplist.into_iter() {
             builder.add_entry(&entry.key, &entry.value)?
         }
 

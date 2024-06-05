@@ -173,31 +173,23 @@ impl Drop for Wal {
     }
 }
 
-impl<'a> IntoIterator for &'a mut Wal {
-    type Item = Entry;
-
-    type IntoIter = WalIterator<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        WalIterator::new(self)
-    }
-}
-
 pub struct WalIterator<'a> {
-    wal: &'a mut Wal,
+    wal: &'a Wal,
     index_bytes: u64,
+    pub restore_write_at: Option<u64>
 }
 
 impl<'a> WalIterator<'a> {
-    pub fn new(wal: &mut Wal) -> WalIterator {
+    pub fn new(wal: &Wal) -> WalIterator {
         WalIterator {
             wal,
             index_bytes: 0,
+            restore_write_at: None
         }
     }
 }
 
-impl<'a> Iterator for WalIterator<'a> {
+impl<'a> Iterator for &mut WalIterator<'a> {
     type Item = Entry;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -209,7 +201,7 @@ impl<'a> Iterator for WalIterator<'a> {
             // might not be the best place. Do we need it in all cases of iteration?
             if item.is_absent() {
                 // restore write position
-                self.wal.write_at = self.index_bytes;
+                self.restore_write_at = Some(self.index_bytes);
                 None
             } else {
                 self.index_bytes += item.get_encoded_size_entry() as u64;
@@ -227,7 +219,7 @@ mod tests {
 
     use crate::entry::{Entry, ValObj};
     use crate::opts::DbOptions;
-    use crate::wal::Wal;
+    use crate::wal::{Wal, WalIterator};
 
     #[test]
     fn iterator() {
@@ -255,12 +247,11 @@ mod tests {
         
         let mut wal = Wal::open(wal_path, &opts).unwrap();
 
-
         wal.add(&e1).unwrap();
         wal.add(&e2).unwrap();
         wal.add(&e3).unwrap();
 
-        let mut iter = wal.into_iter();
+        let mut iter = &mut WalIterator::new(&wal);
         assert_eq!(iter.next(), Some(e1));
         assert_eq!(iter.next(), Some(e2));
         assert_eq!(iter.next(), Some(e3));
@@ -312,7 +303,7 @@ mod tests {
         };
         wal = Wal::open(wal_path, &opts2).unwrap();
 
-        let mut iter = wal.into_iter();
+        let mut iter = &mut WalIterator::new(&wal);
         assert_eq!(iter.next(), Some(e1));
         assert_eq!(iter.next(), Some(e2));
         assert_eq!(iter.next(), Some(e3));

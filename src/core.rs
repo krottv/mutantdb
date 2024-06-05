@@ -92,10 +92,19 @@ impl Core {
     }
     
     fn add_inner(&self, key: Key, val_obj: ValObj) -> Result<()> {
-        let mut memtables = self.inner.memtables.write().unwrap();
+        let mut memtables = self.inner.memtables.read().unwrap();
         if memtables.is_need_to_freeze(Entry::get_encoded_size(&key, &val_obj)) {
-            memtables.freeze_last()?;
-            self.notify_memtable_freeze();
+            
+            drop(memtables);
+
+            {
+                self.inner.memtables.write().unwrap()
+                    .freeze_last()?;
+
+                self.notify_memtable_freeze();
+            }
+            
+            memtables = self.inner.memtables.read().unwrap();
         }
 
         memtables.add(Entry {
@@ -111,7 +120,7 @@ impl Core {
                 if memtable_val.meta == META_DELETE {
                     return None;
                 }
-                return Some(memtable_val.clone());
+                return Some(memtable_val);
             }
         }
 
@@ -137,19 +146,13 @@ impl InnerCore {
     // flushing is sequential for now
     fn do_compaction(&self) -> Result<()> {
         {
-            if let Some(memtable) = self.memtables.write().unwrap().get_back_mut() {
-                memtable.wal.truncate()?;
-            } else {
-                return Err(IllegalState("memtable is absent in flush 1".to_string()));
-            }
-        }
-        {
             if let Some(memtable) = self.memtables.read().unwrap().get_back() {
+                memtable.truncate()?;
                 let sstable_path = self.db_opts.sstables_path.join(SSTable::create_path(self.id_generator.get_new()));
                 let sstable = Builder::build_from_memtable(memtable, sstable_path, self.db_opts.clone())?;
                 self.lcontroller.add_to_l0(sstable)?;
             } else {
-                return Err(IllegalState("memtable is absent in flush 2".to_string()));
+                return Err(IllegalState("memtable is absent in do compaction".to_string()));
             }
         }
         {
