@@ -285,7 +285,7 @@ pub(crate) mod tests {
     use crate::entry;
     use crate::entry::{Entry, ValObj};
     use crate::iterators::sstable_iterator::SSTableIterator;
-    use crate::memtable::Memtable;
+    use crate::memtables::memtable::Memtable;
     use crate::opts::DbOptions;
     use crate::sstable::SSTable;
 

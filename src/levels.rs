@@ -6,6 +6,7 @@ When to compact:
  */
 
 pub mod simple_levels_controller;
+pub mod level;
 
 use std::sync::Arc;
 use crate::entry::{Entry, Key, ValObj};

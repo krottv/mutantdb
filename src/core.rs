@@ -10,7 +10,7 @@ use crate::errors::Error::IllegalState;
 use crate::errors::Result;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::levels::{create_controller, LevelsController};
-use crate::memtable::Memtables;
+use crate::memtables::Memtables;
 use crate::opts::{DbOptions, LevelsOptions};
 use crate::sstable::id_generator::SSTableIdGenerator;
 use crate::sstable::SSTable;
@@ -189,6 +189,7 @@ Test cases:
 
  todo later:
  - check restoration (manifest)
+ - different level strategies
  */
 
 #[cfg(test)]

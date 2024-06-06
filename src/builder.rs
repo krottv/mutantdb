@@ -12,7 +12,7 @@ use proto::meta::{BlockIndex, TableIndex};
 
 use crate::entry::{Entry, ValObj};
 use crate::errors::Result;
-use crate::memtable::Memtable;
+use crate::memtables::memtable::Memtable;
 use crate::opts::DbOptions;
 use crate::sstable::SSTable;
 

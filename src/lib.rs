@@ -1,6 +1,6 @@
 mod skiplist;
 mod entry;
-mod memtable;
+mod memtables;
 mod wal;
 mod comparator;
 mod opts;

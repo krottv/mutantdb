@@ -13,7 +13,9 @@ use ouroboros::self_referencing;
 use crate::entry::{Entry, EntryComparator, ValObj};
 use crate::iterators::merge_iterator::MergeIterator;
 
-use crate::memtable::{Memtable, MemtableInner, Memtables, MemtablesViewIterator};
+use crate::memtables::{Memtables, MemtablesViewIterator};
+use crate::memtables::memtable::Memtable;
+use crate::memtables::memtable::MemtableInner;
 use crate::skiplist::skipiterator::SkipIterator;
 
 #[self_referencing]
