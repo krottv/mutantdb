@@ -5,9 +5,10 @@ use std::thread::{JoinHandle, spawn};
 use bytes::Bytes;
 
 use crate::builder::Builder;
-use crate::entry::{Entry, Key, META_ADD, META_DELETE, ValObj};
+use crate::entry::{Entry, EntryComparator, Key, META_ADD, META_DELETE, ValObj};
 use crate::errors::Error::IllegalState;
 use crate::errors::Result;
+use crate::iterators::merge_iterator::MergeIterator;
 use crate::levels::{create_controller, LevelsController};
 use crate::memtable::Memtables;
 use crate::opts::{DbOptions, LevelsOptions};
@@ -134,12 +135,20 @@ impl Core {
 
         return levels_val_res;
     }
+}
 
-    // todo: shouldn't obtain read lock for everything logically.
-    // pub fn get_iter(&self) -> MergeIterator<Entry> {
-    //     let levels_iter = self.inner.levels.iter();
-    //     let memtable_iter = self.inner.memtables.read().unwrap().
-    // }
+impl IntoIterator for &Core {
+    type Item = Entry;
+    type IntoIter = MergeIterator<Entry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let levels_iter = self.inner.lcontroller.iter();
+        let memtable_iter = Box::new(Memtables::new_memtables_iterator(&self.inner.memtables.read().unwrap()));
+        let entry_comparator = Arc::new(EntryComparator::new(self.inner.db_opts.key_comparator.clone()));
+
+        let iters = vec![levels_iter, memtable_iter];
+        MergeIterator::new(iters, entry_comparator)
+    }
 }
 
 impl InnerCore {
@@ -149,7 +158,7 @@ impl InnerCore {
             if let Some(memtable) = self.memtables.read().unwrap().get_back() {
                 memtable.truncate()?;
                 let sstable_path = self.db_opts.sstables_path.join(SSTable::create_path(self.id_generator.get_new()));
-                let sstable = Builder::build_from_memtable(memtable, sstable_path, self.db_opts.clone())?;
+                let sstable = Builder::build_from_memtable(memtable.clone(), sstable_path, self.db_opts.clone())?;
                 self.lcontroller.add_to_l0(sstable)?;
             } else {
                 return Err(IllegalState("memtable is absent in do compaction".to_string()));
@@ -176,10 +185,10 @@ Test cases:
  - add values in another thread.
  - check that all values are added and only the latest version of them is available
  - check that compaction happened and smth is present in levels
+ - check iterator
 
  todo later:
  - check restoration (manifest)
- - check iterator
  */
 
 #[cfg(test)]
@@ -317,6 +326,12 @@ mod tests {
         for i in 50..100 {
             assert_eq!(core.get(&int_to_bytes(i)), None);
         }
+
+        // check iterator
+        let mut iter = core.into_iter();
+        for i in 1..50 {
+            assert_eq!(bytes_to_int(iter.next().unwrap().val_obj.value), i);
+        }
     }
 
     #[test]
@@ -371,6 +386,17 @@ mod tests {
             for i in 50..100 {
                 assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i * 10);
             }
+        }
+
+        // check iterator
+        let mut iter = core.into_iter();
+        for i in 1..100 {
+            let expect = if i >= 50 {
+                i * 10
+            } else {
+                i
+            };
+            assert_eq!(bytes_to_int(iter.next().unwrap().val_obj.value), expect);
         }
     }
 }

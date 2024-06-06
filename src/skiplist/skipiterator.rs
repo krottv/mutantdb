@@ -9,6 +9,17 @@ pub struct SkipIterator<'a, KEY, VALUE> where
     phantom_data: PhantomData<&'a SkipEntry<KEY, VALUE>>,
 }
 
+impl<'a, KEY, VALUE> SkipIterator<'a, KEY, VALUE> where
+    KEY: Default,
+    VALUE: Default {
+    pub fn new(skiplist_raw: &'a SkiplistRaw<KEY, VALUE>) -> Self {
+        SkipIterator {
+            head_bottom: unsafe { (*skiplist_raw.head_bottom).next },
+            phantom_data: PhantomData {},
+        }
+    }
+}
+
 /**
 By adding these lifetime annotations,
 the Rust compiler can statically verify the memory safety of the code 
@@ -21,12 +32,10 @@ impl<'a, KEY, VALUE> IntoIterator for &'a SkiplistRaw<KEY, VALUE> where
     type IntoIter = SkipIterator<'a, KEY, VALUE>;
 
     fn into_iter(self) -> Self::IntoIter {
-        SkipIterator {
-            head_bottom: unsafe { (*self.head_bottom).next },
-            phantom_data: PhantomData {},
-        }
+        SkipIterator::new(self)
     }
 }
+
 impl<'a, KEY, VALUE> Iterator for SkipIterator<'a, KEY, VALUE> where
     KEY: 'a + Default,
     VALUE: 'a + Default {

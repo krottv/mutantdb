@@ -123,8 +123,8 @@ impl Memtable {
 }
 
 pub struct Memtables {
-    pub mutable: Memtable,
-    pub immutables: VecDeque<Memtable>,
+    pub mutable: Arc<Memtable>,
+    pub immutables: VecDeque<Arc<Memtable>>,
     pub opts: Arc<DbOptions>
 }
 
@@ -137,7 +137,7 @@ impl Memtables {
         std::fs::create_dir_all(&opts.wal_path)?;
         
         let wal_folder = std::fs::read_dir(&opts.wal_path)?;
-        let mut memtables: VecDeque<Memtable> = VecDeque::new();
+        let mut memtables = VecDeque::new();
         
         for file_res in wal_folder {
             if let Ok(file) = file_res {
@@ -146,7 +146,7 @@ impl Memtables {
                 
                 if let Ok(id) = num_name.parse() {
                     
-                    let memtable = Memtable::new(id, file.path(), opts.clone())?;
+                    let memtable = Arc::new(Memtable::new(id, file.path(), opts.clone())?);
                     memtables.push_back(memtable);
                 }
             }
@@ -162,11 +162,11 @@ impl Memtables {
             memtable.restore_wal()?;
         }
         
-        let mutable: Memtable;
+        let mutable: Arc<Memtable>;
         if let Some(mutable_tmp) = memtables.pop_back() {
             mutable = mutable_tmp;
         } else {
-            mutable = Memtable::new(1, opts.wal_path.join(Self::id_to_name(1)), opts.clone())?;
+            mutable = Arc::new(Memtable::new(1, opts.wal_path.join(Self::id_to_name(1)), opts.clone())?);
         }
         
         return Ok(
@@ -223,9 +223,7 @@ impl Memtables {
         }
 
         let new_id = self.mutable.id + 1;
-        //todo: we can add fine grained locks. No need to lock memtables
-        // while creation of new is in process.
-        let new_memtable = Memtable::new(new_id, self.next_path(), self.opts.clone())?;
+        let new_memtable = Arc::new(Memtable::new(new_id, self.next_path(), self.opts.clone())?);
 
         let old_memtable = std::mem::replace(&mut self.mutable, new_memtable);
         self.immutables.push_front(old_memtable);
@@ -233,8 +231,10 @@ impl Memtables {
         return Ok(());
     }
 
-    pub fn get_back(&self) -> Option<&Memtable> {
-        return self.immutables.back()
+    pub fn get_back(&self) -> Option<Arc<Memtable>> {
+        return self.immutables.back().map(|x| {
+            x.clone()
+        })
     }
 
     pub fn pop_back(&mut self) -> Result<()> {
@@ -267,7 +267,7 @@ impl<'a> MemtablesViewIterator<'a> {
 }
 
 impl<'a> Iterator for MemtablesViewIterator<'a> {
-    type Item = &'a Memtable;
+    type Item = Arc<Memtable>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let size = self.memtables.immutables.len() + 1;
@@ -281,7 +281,9 @@ impl<'a> Iterator for MemtablesViewIterator<'a> {
         
         self.index += 1;
         
-        item
+        item.map(|x| {
+            x.clone()
+        })
     }
 }
 
@@ -304,6 +306,7 @@ mod tests {
     use crate::comparator::BytesStringUtf8Comparator;
     use crate::entry;
     use crate::entry::Entry;
+    use crate::iterators::memtable_iterator::MemtableIterator;
     use crate::memtable::Memtables;
     use crate::opts::DbOptions;
 
@@ -334,6 +337,12 @@ mod tests {
         assert_eq!(memtables.get(&e2.key), Some(e2.val_obj.clone()));
         assert_eq!(memtables.get(&Bytes::from("key10")), None);
         assert_eq!(memtables.immutables.len(), 0);
+        
+        let memtable = memtables.mutable;
+        let mut iterator = MemtableIterator::new_from_mem(memtable);
+        assert_eq!(iterator.next(), Some(e1.clone()));
+        assert_eq!(iterator.next(), Some(e2.clone()));
+        assert_eq!(iterator.next(), None);
     }
     
     #[test]
@@ -405,13 +414,21 @@ mod tests {
         
         drop(memtables);
         memtables = Memtables::open(opts).unwrap();
-        
-        assert_eq!(memtables.get(&e3.key), Some(e3.val_obj.clone()));
-        assert_eq!(memtables.get(&e2.key), Some(e3.val_obj.clone()));
+
         assert_eq!(memtables.get(&e1.key), Some(e1.val_obj.clone()));
+        assert_eq!(memtables.get(&e2.key), Some(e3.val_obj.clone()));
+        assert_eq!(memtables.get(&e3.key), Some(e3.val_obj.clone()));
         assert_eq!(memtables.immutables.len(), 2);
         assert_eq!(memtables.mutable.size(), 1);
         assert_eq!(memtables.get(&Bytes::from("key10")), None);
+        
+        // check iterator
+        
+        let mut iterator = Memtables::new_memtables_iterator(&memtables);
+
+        assert_eq!(iterator.next(), Some(e1.clone()));
+        assert_eq!(iterator.next(), Some(e3.clone()));
+        assert_eq!(iterator.next(), None);
     }
 }
 

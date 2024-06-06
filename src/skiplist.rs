@@ -10,7 +10,7 @@ use crate::skiplist::skipvalue::SkipData;
 mod coinflipper;
 mod skipnode;
 mod skipvalue;
-mod skipiterator;
+pub mod skipiterator;
 mod skiplist_test;
 
 type NodePtr<KEY, VALUE> = *mut SkipNode<SkipEntry<KEY, VALUE>>;

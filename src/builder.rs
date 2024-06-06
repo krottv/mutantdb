@@ -116,7 +116,7 @@ impl Builder {
         return SSTable::from_builder(self.index, self.file_path, self.opts.clone(), size_on_disk);
     }
 
-    pub fn build_from_memtable(mem: &Memtable,
+    pub fn build_from_memtable(mem: Arc<Memtable>,
                                file_path: PathBuf,
                                opts: Arc<DbOptions>, ) -> Result<SSTable> {
         let mem_inner = mem.inner.read().unwrap();

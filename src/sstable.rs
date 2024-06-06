@@ -292,11 +292,11 @@ pub(crate) mod tests {
     pub(crate) fn create_sstable<'a>(tmp_dir: &TempDir, opts: Arc<DbOptions>, entries: Vec<Entry>, id: usize) -> SSTable {
         let sstable_path = tmp_dir.path().join(format!("{id:}.mem"));
         let wal_path = tmp_dir.path().join(format!("{id:}.wal"));
-        let memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
+        let memtable = Arc::new(Memtable::new(1, wal_path, opts.clone()).unwrap());
         for entry in entries {
             memtable.add(entry).unwrap();
         }
-        Builder::build_from_memtable(&memtable, sstable_path, opts).unwrap()
+        Builder::build_from_memtable(memtable, sstable_path, opts).unwrap()
     }
 
     #[test]
@@ -329,12 +329,12 @@ pub(crate) mod tests {
             ..Default::default()
         });
 
-        let memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
+        let memtable = Arc::new(Memtable::new(1, wal_path, opts.clone()).unwrap());
         memtable.add(e1.clone()).unwrap();
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let mut sstable = Builder::build_from_memtable(&memtable, sstable_path.clone(), opts.clone()).unwrap();
+        let mut sstable = Builder::build_from_memtable(memtable, sstable_path.clone(), opts.clone()).unwrap();
         if recreate {
             drop(sstable);
             sstable = SSTable::open(sstable_path.clone(), opts.clone()).unwrap()
@@ -388,12 +388,12 @@ pub(crate) mod tests {
             ..Default::default()
         });
 
-        let memtable = Memtable::new(1, wal_path, opts.clone()).unwrap();
+        let memtable = Arc::new(Memtable::new(1, wal_path, opts.clone()).unwrap());
         memtable.add(e1.clone()).unwrap();
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let mut sstable = Builder::build_from_memtable(&memtable, sstable_path.clone(), opts.clone()).unwrap();
+        let mut sstable = Builder::build_from_memtable(memtable, sstable_path.clone(), opts.clone()).unwrap();
         if recreate {
             sstable = SSTable::open(sstable_path, opts).unwrap()
         }
