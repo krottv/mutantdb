@@ -27,12 +27,14 @@ pub struct Builder {
     max_block_size: usize,
     file_path: PathBuf,
     max_version: u64,
+    sstable_id: usize,
 }
 
 impl Builder {
     pub fn new(file_path: PathBuf,
                opts: Arc<DbOptions>,
                max_block_size: usize,
+               sstable_id: usize,
     ) -> Result<Self> {
         let index = TableIndex::default();
         let file = File::options()
@@ -54,16 +56,16 @@ impl Builder {
             buffer,
             max_block_size,
             file_path,
-            max_version: 0
+            max_version: 0,
+            sstable_id,
         })
     }
 
     pub fn add_entry(&mut self, key: &Bytes, val_obj: &ValObj) -> Result<()> {
-        
         if self.counter == 0 {
             self.block.key = key.to_vec();
             self.block.offset = self.block_offset;
-        } 
+        }
 
         // write entry
         let ensure_size = Entry::get_encoded_size(key, val_obj);
@@ -99,7 +101,7 @@ impl Builder {
         self.index.key_count = self.counter;
         self.index.max_version = self.max_version;
         let index_size = self.index.encoded_len();
-        
+
         let all_entries_size = self.writer.stream_position()?;
         self.writer.write(&index_size.to_be_bytes())?;
 
@@ -110,19 +112,20 @@ impl Builder {
         // size of entries is at the end
         self.writer.write(&all_entries_size.to_be_bytes())?;
         self.writer.flush()?;
-        
+
         let size_on_disk = self.writer.stream_position()?;
 
-        return SSTable::from_builder(self.index, self.file_path, self.opts.clone(), size_on_disk);
+        return SSTable::from_builder(self.index, self.file_path, self.opts.clone(), size_on_disk, self.sstable_id);
     }
 
     pub fn build_from_memtable(mem: Arc<Memtable>,
                                file_path: PathBuf,
-                               opts: Arc<DbOptions>, ) -> Result<SSTable> {
+                               opts: Arc<DbOptions>, 
+                               sstable_id: usize) -> Result<SSTable> {
         let mem_inner = mem.inner.read().unwrap();
         let max_block_size = max(opts.block_max_size, mem_inner.compute_max_entry_size() as u32);
 
-        let mut builder = Builder::new(file_path, opts, max_block_size as usize)?;
+        let mut builder = Builder::new(file_path, opts, max_block_size as usize, sstable_id)?;
 
         for entry in mem_inner.skiplist.into_iter() {
             builder.add_entry(&entry.key, &entry.value)?

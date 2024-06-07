@@ -71,7 +71,7 @@ pub struct LeveledOpts {
     // second_level_max_size = next_level_size_multiple * base_level_size
     pub level_size_multiplier: u32,
 
-    pub num_levels: u32,
+    pub num_levels: usize,
     
     pub level0_file_num_compaction_trigger: u32
 }
@@ -106,7 +106,7 @@ pub struct SimpleLeveledOpts {
     // second_level_max_size = next_level_size_multiple * base_level_size
     pub level_size_multiplier: u32,
 
-    pub num_levels: u32
+    pub num_levels: usize
 }
 
 impl SimpleLeveledOpts {

@@ -32,10 +32,9 @@ impl LevelsController {
         Box::new(iter)
     }
 
-    pub fn get_sstable_count(&self, level_id: u32) -> Option<usize> {
-        let i = level_id as usize;
+    pub fn get_sstable_count(&self, level_id: usize) -> Option<usize> {
         let levels = self.levels.read().unwrap();
-        levels.get(i).map(|x| {
+        levels.get(level_id).map(|x| {
             x.run.len()
         })
     }
@@ -63,21 +62,22 @@ impl LevelsController {
 
 
     fn new_builder(&self) -> Result<Builder> {
-        let path = self.db_opts.sstables_path.join(SSTable::create_path(self.id_generator.get_new()));
-        Builder::new(path, self.db_opts.clone(), self.db_opts.block_max_size as usize)
+        let sstable_id = self.id_generator.get_new();
+        let path = self.db_opts.sstables_path.join(SSTable::create_path(sstable_id));
+        Builder::new(path, self.db_opts.clone(), self.db_opts.block_max_size as usize, sstable_id)
     }
     
-    pub fn create_level(&self, id: u32, iterator: MergeIterator<Entry>) -> Result<Level> {
+    pub fn create_sstables(&self, iterator: MergeIterator<Entry>) -> Result<Vec<Arc<SSTable>>> {
         let mut builder = self.new_builder()?;
         let mut builder_entries_size: u64 = 0;
-        let mut level = Level::new_empty(id + 1);
+        let mut tables = Vec::new();
 
         for entry in iterator {
             let entry_size = entry.get_encoded_size_entry();
 
             if (builder_entries_size + entry_size as u64) > self.db_opts.max_memtable_size {
                 let table = builder.build()?;
-                level.add(Arc::new(table));
+                tables.push(Arc::new(table));
                 builder = self.new_builder()?;
                 builder_entries_size = 0;
             }
@@ -88,9 +88,9 @@ impl LevelsController {
 
         if !builder.is_empty() {
             let table = builder.build()?;
-            level.add(Arc::new(table));
+            tables.push(Arc::new(table));
         }
 
-        return Ok(level);
+        return Ok(tables);
     }
 }

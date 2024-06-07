@@ -45,7 +45,8 @@ pub struct SSTable {
     pub first_key: Bytes,
     pub last_key: Bytes,
     pub size_on_disk: u64,
-    pub delete_on_drop: atomic::AtomicBool
+    pub delete_on_drop: atomic::AtomicBool,
+    pub id: usize,
 }
 /*
 You still need an in-memory index to tell you the offsets for some of the keys, 
@@ -65,7 +66,8 @@ impl SSTable {
     pub fn from_builder(index: TableIndex,
                         file_path: PathBuf,
                         opts: Arc<DbOptions>,
-                        size_on_disk: u64) -> Result<SSTable> {
+                        size_on_disk: u64,
+                        id: usize) -> Result<SSTable> {
         unsafe {
             let file = File::open(&file_path)?;
             let mmap = ManuallyDrop::new(Mmap::map(&file)?);
@@ -78,7 +80,8 @@ impl SSTable {
                 first_key: Bytes::new(),
                 last_key: Bytes::new(),
                 size_on_disk,
-                delete_on_drop: atomic::AtomicBool::new(false)
+                delete_on_drop: atomic::AtomicBool::new(false),
+                id
             };
             sstable.init_first_last_keys();
             return Ok(sstable);
@@ -93,7 +96,7 @@ impl SSTable {
     - read_exact guarantees that it will either read the exact
      number of bytes requested (the buffer size) or return an error.
      */
-    pub fn open(file_path: PathBuf, opts: Arc<DbOptions>) -> Result<SSTable> {
+    pub fn open(file_path: PathBuf, opts: Arc<DbOptions>, id: usize) -> Result<SSTable> {
         let file = File::open(&file_path)?;
         let file_size = file.metadata()?.len();
         let mut reader = BufReader::new(file);
@@ -119,21 +122,21 @@ impl SSTable {
 
         let buf = Bytes::from(index_data);
         let index = TableIndex::decode(buf)?;
-        
+
         let size_on_disk = reader.stream_position()?;
 
-        return Self::from_builder(index, file_path, opts, size_on_disk);
+        return Self::from_builder(index, file_path, opts, size_on_disk, id);
     }
-    
+
     pub fn init_first_last_keys(&mut self) {
         if self.index.blocks.is_empty() {
-            return
+            return;
         }
-        
+
         // unwrap because size is guaranteed to be non 0
         let mut first_block = self.get_block(self.index.blocks.get(0).unwrap());
         self.first_key = first_block.entries.pop_front().unwrap().key;
-        
+
         let mut last_block = self.get_block(self.index.blocks.get(self.index.blocks.len() - 1).unwrap());
         self.last_key = last_block.entries.pop_back().unwrap().key;
     }
@@ -246,11 +249,11 @@ impl SSTable {
         unsafe {
             ManuallyDrop::drop(&mut self.mmap);
         }
-        
+
         if self.delete_on_drop.load(atomic::Ordering::Relaxed) {
             fs::remove_file(&self.file_path)?;
         }
-        
+
         Ok(())
     }
 }
@@ -296,18 +299,19 @@ pub(crate) mod tests {
         for entry in entries {
             memtable.add(entry).unwrap();
         }
-        Builder::build_from_memtable(memtable, sstable_path, opts).unwrap()
+        Builder::build_from_memtable(memtable, sstable_path, opts, id).unwrap()
     }
 
     #[test]
     fn basic_create() {
         test_basic_create(false)
     }
+
     #[test]
     fn basic_reopen() {
         test_basic_create(true)
     }
-    
+
     fn test_basic_create(recreate: bool) {
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), entry::META_ADD);
         let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), entry::META_ADD);
@@ -334,12 +338,12 @@ pub(crate) mod tests {
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let mut sstable = Builder::build_from_memtable(memtable, sstable_path.clone(), opts.clone()).unwrap();
+        let mut sstable = Builder::build_from_memtable(memtable, sstable_path.clone(), opts.clone(), 1).unwrap();
         if recreate {
             drop(sstable);
-            sstable = SSTable::open(sstable_path.clone(), opts.clone()).unwrap()
+            sstable = SSTable::open(sstable_path.clone(), opts.clone(), 1).unwrap()
         }
-        
+
         let block = sstable.get_block(&sstable.index.blocks[0]);
 
         assert_eq!(block.entries.len(), 3);
@@ -393,9 +397,9 @@ pub(crate) mod tests {
         memtable.add(e2.clone()).unwrap();
         memtable.add(e3.clone()).unwrap();
 
-        let mut sstable = Builder::build_from_memtable(memtable, sstable_path.clone(), opts.clone()).unwrap();
+        let mut sstable = Builder::build_from_memtable(memtable, sstable_path.clone(), opts.clone(), 1).unwrap();
         if recreate {
-            sstable = SSTable::open(sstable_path, opts).unwrap()
+            sstable = SSTable::open(sstable_path, opts, 1).unwrap()
         }
 
         assert_eq!(sstable.index.blocks.len(), 3);
@@ -431,7 +435,7 @@ pub(crate) mod tests {
         assert_eq!(Some(e3), iterator.next());
         assert_eq!(None, iterator.next());
     }
-    
+
     #[test]
     fn many_blocks() {
         test_many_blocks(false)
@@ -478,7 +482,8 @@ pub(crate) mod tests {
             first_key: Bytes::from(0i32.to_be_bytes().to_vec()),
             last_key: Bytes::from(28i32.to_be_bytes().to_vec()),
             size_on_disk: 0,
-            delete_on_drop: atomic::AtomicBool::new(false)
+            delete_on_drop: atomic::AtomicBool::new(false),
+            id: 1
         };
 
         let mut key = Bytes::from(16i32.to_be_bytes().to_vec());

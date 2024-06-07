@@ -156,8 +156,9 @@ impl InnerCore {
         {
             if let Some(memtable) = self.memtables.read().unwrap().get_back() {
                 memtable.truncate()?;
-                let sstable_path = self.db_opts.sstables_path.join(SSTable::create_path(self.id_generator.get_new()));
-                let sstable = Builder::build_from_memtable(memtable.clone(), sstable_path, self.db_opts.clone())?;
+                let new_id = self.id_generator.get_new();
+                let sstable_path = self.db_opts.sstables_path.join(SSTable::create_path(new_id));
+                let sstable = Builder::build_from_memtable(memtable.clone(), sstable_path, self.db_opts.clone(), new_id)?;
                 self.compactor.add_to_l0(sstable)?;
             } else {
                 return Err(IllegalState("memtable is absent in do compaction".to_string()));

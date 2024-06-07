@@ -14,7 +14,7 @@ impl Targets {
             target_sizes.push(0u64);
         }
 
-        let mut base_level = 0usize;
+        let mut base_level;
         if current_sizes[current_sizes.len() - 1] < base_level_size {
             base_level = current_sizes.len() - 1;
             target_sizes[base_level] = base_level_size;

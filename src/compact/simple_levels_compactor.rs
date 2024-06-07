@@ -17,7 +17,7 @@ pub struct SimpleLevelsCompactor {
 
 impl SimpleLevelsCompactor {
     pub fn new_empty(id_generator: Arc<SSTableIdGenerator>, level_opts: SimpleLeveledOpts, db_opts: Arc<DbOptions>) -> Self {
-        let mut levels = Vec::with_capacity(level_opts.num_levels as usize);
+        let mut levels = Vec::with_capacity(level_opts.num_levels);
         for i in 0..level_opts.num_levels {
             levels.push(Level::new_empty(i));
         }
@@ -34,20 +34,22 @@ impl SimpleLevelsCompactor {
         }
     }
 
-    fn force_compact(&self, level_id: u32) -> Result<()> {
+    fn force_compact(&self, level_id: usize) -> Result<()> {
         let levels = self.controller.levels.read().unwrap();
         // merge current level and the next level; which is guaranteed to be present.
         let entry_comparator = Arc::new(EntryComparator::new(self.controller.db_opts.key_comparator.clone()));
 
         // get total iterator
-        let level1 = levels.get(level_id as usize).unwrap();
-        let level2 = levels.get((level_id + 1) as usize).unwrap();
+        let level1 = levels.get(level_id).unwrap();
+        let level2 = levels.get(level_id + 1).unwrap();
         let iter1 = level1.create_iterator_for_level(entry_comparator.clone());
         let iter2 = level2.create_iterator_for_level(entry_comparator.clone());
         let iterators: Vec<Box<dyn Iterator<Item=Entry>>> = vec![iter1, iter2];
         let total_iter = MergeIterator::new(iterators, entry_comparator);
         // new level
-        let new_level = self.controller.create_level(level_id, total_iter)?;
+        
+        let new_tables = self.controller.create_sstables(total_iter)?;
+        let new_level = Level::new(level_id + 1, &new_tables);
 
         // delete old sstables
         for sstable in level1.run.iter() {
@@ -62,25 +64,25 @@ impl SimpleLevelsCompactor {
 
         {
             let mut levels = self.controller.levels.write().unwrap();
-            levels[level_id as usize] = Level::new_empty(level_id);
-            levels[(level_id + 1) as usize] = new_level;
+            levels[level_id] = Level::new_empty(level_id);
+            levels[level_id + 1] = new_level;
         }
 
         // check for the next level
         return self.check_compact(level_id + 1);
     }
 
-    fn check_compact(&self, level_id: u32) -> Result<()> {
+    fn check_compact(&self, level_id: usize) -> Result<()> {
         let levels = self.controller.levels.read().unwrap();
 
         // skip if it's the last level
-        if level_id as usize >= (levels.len() - 1) {
+        if level_id >= (levels.len() - 1) {
             return Ok(());
         }
 
         let level_max_size = self.level_opts.base_level_size * (self.level_opts.level_size_multiplier as u64)
-            .pow(level_id);
-        let cur_level = levels.get(level_id as usize).unwrap();
+            .pow(level_id as u32);
+        let cur_level = levels.get(level_id).unwrap();
 
         if cur_level.size_on_disk < level_max_size {
             return Ok(());
