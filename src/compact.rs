@@ -18,7 +18,8 @@ use crate::sstable::SSTable;
 pub mod simple_levels_compactor;
 pub mod level;
 pub mod levels_controller;
-mod levels_compactor;
+pub mod levels_compactor;
+pub mod targets;
 
 pub trait Compactor: Send + Sync {
     // not mut because it should handle concurrency inside

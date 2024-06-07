@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 use crate::compact::{Compactor, LeveledOpts};
 use crate::compact::level::Level;
 use crate::compact::levels_controller::LevelsController;
+use crate::compact::targets::Targets;
 use crate::db_options::DbOptions;
 use crate::errors::Result;
 use crate::sstable::id_generator::SSTableIdGenerator;
@@ -32,11 +33,23 @@ impl LevelsCompactor {
             controller,
         }
     }
-    
+
     pub fn check_compact(&self) -> Result<()> {
         todo!()
     }
+    
+    fn compute_targets(&self) -> Targets {
+        let x = &self.controller.levels.read().unwrap()[1..];
+        let current_sizes: Vec<u64> = x
+            .iter().map(|x| {
+            x.size_on_disk
+        }).collect();
+
+        Targets::compute(current_sizes, self.level_opts.base_level_size, self.level_opts.level_size_multiplier)
+    }
 }
+
+
 
 impl Compactor for LevelsCompactor {
     fn add_to_l0(&self, sstable: SSTable) -> Result<()> {
@@ -45,9 +58,9 @@ impl Compactor for LevelsCompactor {
             self.controller.levels.write().unwrap().get_mut(0)
                 .unwrap().add(sstable_arc);
         }
-        
+
         self.check_compact()?;
-        
+
         return Ok(());
     }
 
