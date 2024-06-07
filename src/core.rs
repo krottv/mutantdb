@@ -9,9 +9,9 @@ use crate::entry::{Entry, EntryComparator, Key, META_ADD, META_DELETE, ValObj};
 use crate::errors::Error::IllegalState;
 use crate::errors::Result;
 use crate::iterators::merge_iterator::MergeIterator;
-use crate::levels::{create_controller, LevelsController};
+use crate::compact::{create_compactor, Compactor};
 use crate::memtables::Memtables;
-use crate::opts::{DbOptions, LevelsOptions};
+use crate::db_options::{DbOptions};
 use crate::sstable::id_generator::SSTableIdGenerator;
 use crate::sstable::SSTable;
 
@@ -22,22 +22,22 @@ pub struct Core {
 
 pub struct InnerCore {
     db_opts: Arc<DbOptions>,
-    lcontroller: Box<dyn LevelsController>,
+    compactor: Box<dyn Compactor>,
     memtables: RwLock<Memtables>,
     id_generator: Arc<SSTableIdGenerator>,
 }
 
 impl Core {
-    pub fn new(db_opts: Arc<DbOptions>, level_opts: Arc<LevelsOptions>) -> Result<Self> {
+    pub fn new(db_opts: Arc<DbOptions>) -> Result<Self> {
         let memtables = RwLock::new(Memtables::open(db_opts.clone())?);
         // todo: set right id after restoring the manifest.
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
 
-        let lcontroller = create_controller(id_generator.clone(), level_opts, db_opts.clone());
+        let compactor = create_compactor(id_generator.clone(), db_opts.clone());
 
         let inner = InnerCore {
             db_opts,
-            lcontroller,
+            compactor,
             memtables,
             id_generator,
         };
@@ -80,7 +80,7 @@ impl Core {
 
         self.add_inner(key, val_obj)
     }
-    
+
     pub fn remove(&self, key: Bytes) -> Result<()> {
         let val_obj = ValObj {
             value: Bytes::new(),
@@ -91,11 +91,10 @@ impl Core {
 
         self.add_inner(key, val_obj)
     }
-    
+
     fn add_inner(&self, key: Key, val_obj: ValObj) -> Result<()> {
         let mut memtables = self.inner.memtables.read().unwrap();
         if memtables.is_need_to_freeze(Entry::get_encoded_size(&key, &val_obj)) {
-            
             drop(memtables);
 
             {
@@ -104,7 +103,7 @@ impl Core {
 
                 self.notify_memtable_freeze();
             }
-            
+
             memtables = self.inner.memtables.read().unwrap();
         }
 
@@ -125,7 +124,7 @@ impl Core {
             }
         }
 
-        let levels_val_res = inner_self.lcontroller.get(key);
+        let levels_val_res = inner_self.compactor.get_controller().get(key);
         if levels_val_res.is_some() {
             let v = levels_val_res.as_ref().unwrap();
             if v.meta == META_DELETE {
@@ -142,7 +141,7 @@ impl IntoIterator for &Core {
     type IntoIter = MergeIterator<Entry>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let levels_iter = self.inner.lcontroller.iter();
+        let levels_iter = self.inner.compactor.get_controller().iter();
         let memtable_iter = Box::new(Memtables::new_memtables_iterator(&self.inner.memtables.read().unwrap()));
         let entry_comparator = Arc::new(EntryComparator::new(self.inner.db_opts.key_comparator.clone()));
 
@@ -159,7 +158,7 @@ impl InnerCore {
                 memtable.truncate()?;
                 let sstable_path = self.db_opts.sstables_path.join(SSTable::create_path(self.id_generator.get_new()));
                 let sstable = Builder::build_from_memtable(memtable.clone(), sstable_path, self.db_opts.clone())?;
-                self.lcontroller.add_to_l0(sstable)?;
+                self.compactor.add_to_l0(sstable)?;
             } else {
                 return Err(IllegalState("memtable is absent in do compaction".to_string()));
             }
@@ -184,12 +183,12 @@ impl InnerCore {
 Test cases:
  - add values in another thread.
  - check that all values are added and only the latest version of them is available
- - check that compaction happened and smth is present in levels
+ - check that compaction happened and smth is present in compact
  - check iterator
 
  todo later:
  - check restoration (manifest)
- - different level strategies
+ - different compaction strategies
  */
 
 #[cfg(test)]
@@ -199,9 +198,10 @@ mod tests {
     use std::time::Duration;
     use bytes::Bytes;
     use tempfile::tempdir;
+    use crate::compact::{CompactionOptions, SimpleLeveledOpts};
     use crate::comparator::BytesI32Comparator;
     use crate::core::Core;
-    use crate::opts::{DbOptions, LevelsOptions};
+    use crate::db_options::{DbOptions};
 
     fn int_to_bytes(v: i32) -> Bytes {
         Bytes::from(v.to_be_bytes().to_vec())
@@ -224,20 +224,18 @@ mod tests {
                 sstables_path: tmp_dir.path().join("mem"),
                 key_comparator: comparator,
                 max_memtable_size: 1,
+                compaction: Arc::new(CompactionOptions::SimpleLeveled(SimpleLeveledOpts {
+                    base_level_size: 10000,
+                    num_levels: 3,
+                    level_size_multiplier: 10,
+                })),
                 ..Default::default()
             }
-        );    
+        );
         std::fs::create_dir_all(&db_opts.wal_path).unwrap();
         std::fs::create_dir_all(&db_opts.sstables_path).unwrap();
-        let level_opts = Arc::new(
-            LevelsOptions {
-                level_max_size: 10000,
-                num_levels: 3,
-                next_level_size_multiple: 10,
-            }
-        );
 
-        let mut core = Core::new(db_opts, level_opts).unwrap();
+        let mut core = Core::new(db_opts).unwrap();
         let _handle = core.start_compact_job();
 
         for i in 1..100 {
@@ -253,7 +251,7 @@ mod tests {
         sleep(Duration::from_millis(1000));
 
         assert_eq!(core.inner.memtables.read().unwrap().count(), 1);
-        assert!(core.inner.lcontroller.get_sstable_count_total() >= 1);
+        assert!(core.inner.compactor.get_controller().get_sstable_count_total() >= 1);
 
         for i in 1..50 {
             assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);
@@ -273,21 +271,18 @@ mod tests {
                 sstables_path: tmp_dir.path().join("mem"),
                 key_comparator: comparator,
                 max_memtable_size: 1,
+                compaction: Arc::new(CompactionOptions::SimpleLeveled(SimpleLeveledOpts {
+                    base_level_size: 10000,
+                    num_levels: 3,
+                    level_size_multiplier: 10,
+                })),
                 ..Default::default()
             }
         );
         std::fs::create_dir_all(&db_opts.wal_path).unwrap();
         std::fs::create_dir_all(&db_opts.sstables_path).unwrap();
-        
-        let level_opts = Arc::new(
-            LevelsOptions {
-                level_max_size: 1000000,
-                num_levels: 3,
-                next_level_size_multiple: 10,
-            }
-        );
 
-        let core = Core::new(db_opts, level_opts).unwrap();
+        let core = Core::new(db_opts).unwrap();
 
         for i in 1..100 {
             core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
@@ -299,16 +294,16 @@ mod tests {
 
         let memtables_count = core.inner.memtables.read().unwrap().count();
         assert!(memtables_count > 1);
-        assert_eq!(core.inner.lcontroller.get_sstable_count_total(), 0);
+        assert_eq!(core.inner.compactor.get_controller().get_sstable_count_total(), 0);
 
         let mut iteration = 0usize;
         while memtables_count < iteration {
             iteration += 1;
             core.inner.do_compaction().unwrap();
-            
+
             assert_eq!(core.inner.memtables.read().unwrap().count(), memtables_count - iteration);
-            assert_eq!(core.inner.lcontroller.get_sstable_count_total(), 1);
-            
+            assert_eq!(core.inner.compactor.get_controller().get_sstable_count_total(), 1);
+
             for i in 1..50 {
                 assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);
             }
@@ -345,21 +340,18 @@ mod tests {
                 sstables_path: tmp_dir.path().join("mem"),
                 key_comparator: comparator,
                 max_memtable_size: 1,
+                compaction: Arc::new(CompactionOptions::SimpleLeveled(SimpleLeveledOpts {
+                    base_level_size: 1,
+                    num_levels: 3,
+                    level_size_multiplier: 1,
+                })),
                 ..Default::default()
             }
         );
         std::fs::create_dir_all(&db_opts.wal_path).unwrap();
         std::fs::create_dir_all(&db_opts.sstables_path).unwrap();
 
-        let level_opts = Arc::new(
-            LevelsOptions {
-                level_max_size: 1,
-                num_levels: 3,
-                next_level_size_multiple: 1,
-            }
-        );
-
-        let core = Core::new(db_opts, level_opts).unwrap();
+        let core = Core::new(db_opts).unwrap();
 
         for i in 1..100 {
             core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
@@ -371,7 +363,7 @@ mod tests {
 
         let memtables_count = core.inner.memtables.read().unwrap().count();
         assert!(memtables_count > 1);
-        assert_eq!(core.inner.lcontroller.get_sstable_count_total(), 0);
+        assert_eq!(core.inner.compactor.get_controller().get_sstable_count_total(), 0);
 
         let mut iteration = 0usize;
         while memtables_count < iteration {
@@ -379,7 +371,7 @@ mod tests {
             core.inner.do_compaction().unwrap();
 
             assert_eq!(core.inner.memtables.read().unwrap().count(), memtables_count - iteration);
-            assert_eq!(core.inner.lcontroller.get_sstable_count_total(), iteration);
+            assert_eq!(core.inner.compactor.get_controller().get_sstable_count_total(), iteration);
 
             for i in 1..50 {
                 assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);

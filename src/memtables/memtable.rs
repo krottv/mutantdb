@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 use bytes::Bytes;
 use crate::entry::{Entry, ValObj};
-use crate::opts::DbOptions;
+use crate::db_options::DbOptions;
 use crate::skiplist::{AddResult, SkiplistRaw};
 use crate::wal::{Wal, WalIterator};
 

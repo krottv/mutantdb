@@ -175,7 +175,7 @@ mod tests {
     use crate::comparator::BytesStringUtf8Comparator;
     use crate::entry::{Entry, EntryComparator, META_ADD, ValObj};
     use crate::iterators::sstable_iterator::SSTableIterator;
-    use crate::opts::DbOptions;
+    use crate::db_options::DbOptions;
     use crate::sstable::tests::create_sstable;
 
     use super::*;

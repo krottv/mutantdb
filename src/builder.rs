@@ -13,7 +13,7 @@ use proto::meta::{BlockIndex, TableIndex};
 use crate::entry::{Entry, ValObj};
 use crate::errors::Result;
 use crate::memtables::memtable::Memtable;
-use crate::opts::DbOptions;
+use crate::db_options::DbOptions;
 use crate::sstable::SSTable;
 
 pub struct Builder {

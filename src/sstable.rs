@@ -18,7 +18,7 @@ use proto::meta::{BlockIndex, TableIndex};
 
 use crate::entry::Entry;
 use crate::errors::Result;
-use crate::opts::DbOptions;
+use crate::db_options::DbOptions;
 use crate::util::no_fail;
 
 /**
@@ -286,7 +286,7 @@ pub(crate) mod tests {
     use crate::entry::{Entry, ValObj};
     use crate::iterators::sstable_iterator::SSTableIterator;
     use crate::memtables::memtable::Memtable;
-    use crate::opts::DbOptions;
+    use crate::db_options::DbOptions;
     use crate::sstable::SSTable;
 
     pub(crate) fn create_sstable<'a>(tmp_dir: &TempDir, opts: Arc<DbOptions>, entries: Vec<Entry>, id: usize) -> SSTable {

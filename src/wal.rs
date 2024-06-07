@@ -8,7 +8,7 @@ use bytes::{BytesMut};
 use memmap2::MmapMut;
 
 use crate::entry::{Entry, ZERO_ENTRY_SIZE};
-use crate::opts::DbOptions;
+use crate::db_options::DbOptions;
 use crate::errors::Result;
 use crate::util::no_fail;
 
@@ -218,7 +218,7 @@ mod tests {
     use crate::entry;
 
     use crate::entry::{Entry, ValObj};
-    use crate::opts::DbOptions;
+    use crate::db_options::DbOptions;
     use crate::wal::{Wal, WalIterator};
 
     #[test]

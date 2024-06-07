@@ -8,7 +8,7 @@ use bytes::Bytes;
 use crate::entry::{Entry, ValObj};
 use crate::errors::Result;
 use crate::memtables::memtable::Memtable;
-use crate::opts::DbOptions;
+use crate::db_options::DbOptions;
 
 pub mod memtable;
 
@@ -129,7 +129,7 @@ impl Memtables {
 
     pub fn pop_back(&mut self) -> Result<()> {
         if let Some(_popped) = self.immutables.pop_back() {
-            
+            _popped.wal.write().unwrap().mark_delete();
         } else {
             panic!("can't pop items of len 0")
         }
@@ -198,7 +198,7 @@ mod tests {
     use crate::entry::Entry;
     use crate::iterators::memtable_iterator::MemtableIterator;
     use crate::memtables::Memtables;
-    use crate::opts::DbOptions;
+    use crate::db_options::DbOptions;
 
     #[test]
     fn create_write_read() {
