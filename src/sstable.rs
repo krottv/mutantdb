@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic;
 
 use bytes::Bytes;
-use memmap2::Mmap;
+use memmap2::{Advice, Mmap};
 use prost::Message;
 
 use proto::meta::{BlockIndex, TableIndex};
@@ -41,7 +41,7 @@ pub struct SSTable {
     // manually drop because we need to drop it before deleting file to prevent errors
     pub mmap: ManuallyDrop<Mmap>,
     pub file_path: PathBuf,
-    opts: Arc<DbOptions>,
+    pub opts: Arc<DbOptions>,
     pub first_key: Bytes,
     pub last_key: Bytes,
     pub size_on_disk: u64,
@@ -71,7 +71,9 @@ impl SSTable {
         unsafe {
             let file = File::open(&file_path)?;
             let mmap = ManuallyDrop::new(Mmap::map(&file)?);
-
+            mmap.advise(Advice::Random)?;
+            
+            
             let mut sstable = SSTable {
                 index,
                 mmap,

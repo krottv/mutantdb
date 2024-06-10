@@ -5,20 +5,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::{BytesMut};
-use memmap2::MmapMut;
+use memmap2::{Advice, MmapMut};
 
 use crate::entry::{Entry, ZERO_ENTRY_SIZE};
 use crate::db_options::DbOptions;
 use crate::errors::Result;
 use crate::util::no_fail;
 
-//todo: checksum to verify if WAL corrupted
-
-// Is it worth using memory map?
-// Traditional file writing involves copying data from user space to kernel space buffers and then to disk.
-// With memory mapping, the data is directly mapped to the process's address space, avoiding the extra copy to kernel buffers.
-
-// But, at the same time here memory caching is not needed at all.
 pub struct Wal {
     // manually drop because we need to drop it before deleting file to prevent errors
     mmap: ManuallyDrop<MmapMut>,
@@ -54,6 +47,8 @@ impl Wal {
 
         unsafe {
             let mmap = ManuallyDrop::new(MmapMut::map_mut(&file)?);
+            mmap.advise(Advice::Sequential)?;
+            
             return Ok(
                 Wal {
                     mmap,

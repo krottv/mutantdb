@@ -193,7 +193,7 @@ Test cases:
  */
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::sync::Arc;
     use std::thread::sleep;
     use std::time::Duration;
@@ -204,13 +204,13 @@ mod tests {
     use crate::core::Core;
     use crate::db_options::{DbOptions};
 
-    fn int_to_bytes(v: i32) -> Bytes {
+    pub fn int_to_bytes(v: i32) -> Bytes {
         Bytes::from(v.to_be_bytes().to_vec())
     }
 
-    fn bytes_to_int(b: Bytes) -> i32 {
+    pub fn bytes_to_int(b: &Bytes) -> i32 {
         let mut arr = [0u8; 4];
-        arr.copy_from_slice(&b);
+        arr.copy_from_slice(b);
 
         i32::from_be_bytes(arr)
     }
@@ -255,10 +255,10 @@ mod tests {
         assert!(core.inner.compactor.get_controller().get_sstable_count_total() >= 1);
 
         for i in 1..50 {
-            assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);
+            assert_eq!(bytes_to_int(&core.get(&int_to_bytes(i)).unwrap().value), i);
         }
         for i in 50..100 {
-            assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i * 10);
+            assert_eq!(bytes_to_int(&core.get(&int_to_bytes(i)).unwrap().value), i * 10);
         }
     }
 
@@ -306,10 +306,10 @@ mod tests {
             assert_eq!(core.inner.compactor.get_controller().get_sstable_count_total(), 1);
 
             for i in 1..50 {
-                assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);
+                assert_eq!(bytes_to_int(&core.get(&int_to_bytes(i)).unwrap().value), i);
             }
             for i in 50..100 {
-                assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i * 10);
+                assert_eq!(bytes_to_int(&core.get(&int_to_bytes(i)).unwrap().value), i * 10);
             }
         }
 
@@ -318,7 +318,7 @@ mod tests {
         }
 
         for i in 1..50 {
-            assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);
+            assert_eq!(bytes_to_int(&core.get(&int_to_bytes(i)).unwrap().value), i);
         }
         for i in 50..100 {
             assert_eq!(core.get(&int_to_bytes(i)), None);
@@ -327,7 +327,7 @@ mod tests {
         // check iterator
         let mut iter = core.into_iter();
         for i in 1..50 {
-            assert_eq!(bytes_to_int(iter.next().unwrap().val_obj.value), i);
+            assert_eq!(bytes_to_int(&iter.next().unwrap().val_obj.value), i);
         }
     }
 
@@ -375,10 +375,10 @@ mod tests {
             assert_eq!(core.inner.compactor.get_controller().get_sstable_count_total(), iteration);
 
             for i in 1..50 {
-                assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i);
+                assert_eq!(bytes_to_int(&core.get(&int_to_bytes(i)).unwrap().value), i);
             }
             for i in 50..100 {
-                assert_eq!(bytes_to_int(core.get(&int_to_bytes(i)).unwrap().value), i * 10);
+                assert_eq!(bytes_to_int(&core.get(&int_to_bytes(i)).unwrap().value), i * 10);
             }
         }
 
@@ -390,7 +390,7 @@ mod tests {
             } else {
                 i
             };
-            assert_eq!(bytes_to_int(iter.next().unwrap().val_obj.value), expect);
+            assert_eq!(bytes_to_int(&iter.next().unwrap().val_obj.value), expect);
         }
     }
 }

@@ -37,10 +37,10 @@ impl Level {
 
     pub fn set_new_run(&mut self, run: VecDeque<Arc<SSTable>>) {
         self.run = run;
-        self.recalc_run();
+        self.calc_size_on_disk();
     }
 
-    pub fn recalc_run(&mut self) {
+    pub fn calc_size_on_disk(&mut self) {
         let mut size_on_disk = 0u64;
         for sstable in &self.run {
             size_on_disk += sstable.size_on_disk;
@@ -153,8 +153,8 @@ impl Level {
         // a binary search can be employed. But not a huge optimization, considering small sample size.
 
         self.run.iter().filter(|x| {
-            db_options.key_comparator.compare(&x.first_key, lowest_key).is_ge() &&
-                db_options.key_comparator.compare(&x.last_key, highest_key).is_ge()
+            db_options.key_comparator.compare(&x.last_key, lowest_key).is_ge() &&
+                db_options.key_comparator.compare(&x.first_key, highest_key).is_le()
         }).cloned().collect()
     }
 }
