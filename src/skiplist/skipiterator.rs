@@ -57,7 +57,6 @@ impl<'a, KEY, VALUE> Iterator for SkipIterator<'a, KEY, VALUE> where
 
 
 // drain version of iterator
-// todo: WTF we need 2 lifetimes? Think about where lifetime for skiplist key-value
 
 /*
 The lifetime 'b, on the other hand, is associated with the 

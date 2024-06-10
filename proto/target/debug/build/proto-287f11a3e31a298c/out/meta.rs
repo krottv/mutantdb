@@ -3,8 +3,8 @@
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BlockIndex {
     /// first key of the block
-    #[prost(bytes = "vec", tag = "1")]
-    pub key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub key: ::prost::bytes::Bytes,
     #[prost(uint64, tag = "2")]
     pub offset: u64,
     #[prost(uint32, tag = "3")]

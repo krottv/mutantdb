@@ -330,9 +330,7 @@ mod tests {
         );
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
         let compactor = LevelsCompactor::new_empty(id_generator.clone(), level_opts, db_opts.clone());
-        let tmp_dir = tempdir().unwrap();
-
-
+    
         // some level has priority
         let targets = Targets {
             base_level: 1,

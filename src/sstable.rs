@@ -34,7 +34,6 @@ blocks_size: 8 bytes
 
  */
 
-//todo: checksum
 pub struct SSTable {
     pub index: TableIndex,
     // cache for blocks. Simpler then hashmap based
@@ -54,7 +53,6 @@ but it can be sparse: one key for every few kilobytes of segment file is suffici
 because a few kilobytes can be scanned very quickly.
  */
 
-//todo: compression
 pub struct Block {
     pub block_index: BlockIndex,
     pub entries: VecDeque<Entry>,
@@ -164,11 +162,7 @@ impl SSTable {
 
         while left <= right {
             let mid = (left as i64 + (right as i64 - left as i64) / 2) as usize;
-            //todo: clone here is unnecessary copying of bytes. But how to avoid?
-            // make comparator operate on vec? But fucking generics are weird.
-            // possible with asRef if was a concrete type
-            let mid_bytes = Bytes::from(self.index.blocks[mid].key.clone());
-            let ord = self.opts.key_comparator.compare(&mid_bytes, key);
+            let ord = self.opts.key_comparator.compare(&self.index.blocks[mid].key, key);
 
             match ord {
                 Ordering::Equal => {
@@ -456,7 +450,7 @@ pub(crate) mod tests {
         // [0,4,8,12,16,20,24,28]
         for (i, key) in (0..30).step_by(4).enumerate() {
             block_indexes.push(BlockIndex {
-                key: (key as i32).to_be_bytes().to_vec(),
+                key: Bytes::from((key as i32).to_be_bytes().to_vec()),
                 offset: i as u64,
                 len: i as u32,
             });
@@ -480,7 +474,7 @@ pub(crate) mod tests {
             index: table_index,
             mmap: ManuallyDrop::new(MmapOptions::new().map_anon().unwrap().make_read_only().unwrap()),
             file_path: sstable_path,
-            opts: opts,
+            opts,
             first_key: Bytes::from(0i32.to_be_bytes().to_vec()),
             last_key: Bytes::from(28i32.to_be_bytes().to_vec()),
             size_on_disk: 0,

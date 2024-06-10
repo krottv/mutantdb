@@ -63,7 +63,7 @@ impl Builder {
 
     pub fn add_entry(&mut self, key: &Bytes, val_obj: &ValObj) -> Result<()> {
         if self.counter == 0 {
-            self.block.key = key.to_vec();
+            self.block.key = key.clone();
             self.block.offset = self.block_offset;
         }
 
@@ -84,7 +84,7 @@ impl Builder {
             self.index.blocks.push(old_val);
 
             self.block.offset = self.block_offset;
-            self.block.key = key.to_vec();
+            self.block.key = key.clone();
         }
         self.block.len += encoded_size as u32;
 
