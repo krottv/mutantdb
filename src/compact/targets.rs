@@ -1,7 +1,20 @@
+use std::fmt;
+
+#[derive(Debug, Clone)]
 pub struct Targets {
     pub base_level: usize,
     pub current_sizes: Vec<u64>,
-    pub target_sizes: Vec<u64>
+    pub target_sizes: Vec<u64>,
+}
+
+impl fmt::Display for Targets {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Targets {{\n")?;
+        write!(f, "  Base Level: {}\n", self.base_level)?;
+        write!(f, "  Current Sizes: {:?}", self.current_sizes)?;
+        write!(f, "  Target Sizes: {:?}", self.target_sizes)?;
+        write!(f, "}}\n")
+    }
 }
 
 impl Targets {
@@ -19,18 +32,21 @@ impl Targets {
             base_level = current_sizes.len() - 1;
             target_sizes[base_level] = base_level_size;
         } else {
-            
             let mut cur_target_size = current_sizes[current_sizes.len() - 1];
             base_level = current_sizes.len() - 1;
             loop {
+                
+                target_sizes[base_level] = cur_target_size;
+                if cur_target_size < base_level_size ||
+                    // if previous is also equals target size then break
+                    (cur_target_size == base_level_size && base_level != current_sizes.len() - 1 && 
+                        cur_target_size == target_sizes[base_level + 1]) {
+                    break;
+                }
                 if base_level == 0 {
                     break;
                 }
-                target_sizes[base_level] = cur_target_size;
-                if cur_target_size < base_level_size {
-                    break;
-                }
-                
+
                 base_level -= 1;
                 cur_target_size /= level_size_multiplier as u64;
             }
@@ -39,7 +55,7 @@ impl Targets {
         Targets {
             base_level,
             current_sizes,
-            target_sizes
+            target_sizes,
         }
     }
 }

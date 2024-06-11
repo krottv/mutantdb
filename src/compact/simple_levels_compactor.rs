@@ -123,7 +123,7 @@ Test cases
 - Check that duplicated keys are deleted.
 */
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
@@ -137,7 +137,7 @@ mod tests {
     use crate::sstable::id_generator::SSTableIdGenerator;
     use crate::sstable::tests::create_sstable;
 
-    fn new_entry(key: i32, value: i32) -> Entry {
+    pub fn new_entry(key: i32, value: i32) -> Entry {
         Entry {
             key: Bytes::from(key.to_be_bytes().to_vec()),
             val_obj: ValObj {

@@ -189,7 +189,6 @@ Test cases:
 
  todo later:
  - check restoration (manifest)
- - different compaction strategies
  */
 
 #[cfg(test)]

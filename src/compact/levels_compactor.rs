@@ -49,16 +49,22 @@ impl LevelsCompactor {
         return if let Some(last_priority) = priorities.pop() {
             let from_level_id = last_priority.level_id;
             let to_level_id = if from_level_id == 0 {
-                targets.base_level
+                // +1 because base_level is calculated from an array starting from 1 level.
+                targets.base_level + 1
             } else {
                 from_level_id + 1
             };
 
             let (from_sstables, to_sstables) = self.select_tables_for_merge(from_level_id, to_level_id);
-
-            // building new tables
-            let total_iter = self.create_iterator_for_tables(from_level_id, to_level_id, &from_sstables, &to_sstables);
-            let new_tables = self.controller.create_sstables(total_iter)?;
+            
+            // check if nothing to merge with, then just move without processing
+            let new_tables: Vec<Arc<SSTable>> = if to_sstables.is_empty() {
+                from_sstables.clone()
+            } else {
+                // building new tables
+                let total_iter = self.create_iterator_for_tables(from_level_id, to_level_id, &from_sstables, &to_sstables);
+                self.controller.create_sstables(total_iter)?
+            };
 
             let keys_to_remove_to = to_sstables.iter().map(|x| {
                 x.id
@@ -264,12 +270,14 @@ mod tests {
     use std::sync::{Arc, atomic};
 
     use bytes::Bytes;
+    use log::LevelFilter;
     use memmap2::Mmap;
+    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tempfile::{tempdir, tempfile};
 
     use proto::meta::TableIndex;
 
-    use crate::compact::LeveledOpts;
+    use crate::compact::{Compactor, LeveledOpts};
     use crate::compact::levels_compactor::LevelsCompactor;
     use crate::compact::targets::Targets;
     use crate::comparator::BytesI32Comparator;
@@ -277,6 +285,8 @@ mod tests {
     use crate::db_options::DbOptions;
     use crate::sstable::id_generator::SSTableIdGenerator;
     use crate::sstable::SSTable;
+    use crate::sstable::tests::create_sstable;
+
 
     #[test]
     fn empty() {
@@ -330,7 +340,7 @@ mod tests {
         );
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
         let compactor = LevelsCompactor::new_empty(id_generator.clone(), level_opts, db_opts.clone());
-    
+
         // some level has priority
         let targets = Targets {
             base_level: 1,
@@ -496,10 +506,172 @@ mod tests {
         {
             let mut levels = compactor.controller.levels.write().unwrap();
             assert_eq!(levels[1].run.len(), 1);
-            assert_eq!(tables_to_ranges(levels[1].run.make_contiguous()), vec![(1,3)]);
-            
+            assert_eq!(tables_to_ranges(levels[1].run.make_contiguous()), vec![(1, 3)]);
+
             assert_eq!(levels[2].run.len(), 5);
-            assert_eq!(tables_to_ranges(levels[2].run.make_contiguous()), vec![(1,2), (3, 8), (9, 10), (11,12), (13,14)]);
+            assert_eq!(tables_to_ranges(levels[2].run.make_contiguous()), vec![(1, 2), (3, 8), (9, 10), (11, 12), (13, 14)]);
         }
+    }
+    
+    pub fn init_log() {
+        let _log = TermLogger::init(LevelFilter::Info, Config::default(),
+                                    TerminalMode::Mixed, ColorChoice::Auto).unwrap();
+    }
+
+    #[test]
+    fn add_overlapping_last_level() {
+        init_log();
+
+        let tmp_dir = tempdir().unwrap();
+        let comparator = Arc::new(BytesI32Comparator {});
+        let db_opts = Arc::new(
+            DbOptions {
+                key_comparator: comparator,
+                sstables_path: tmp_dir.path().to_path_buf(),
+                ..Default::default()
+            }
+        );
+        let level_opts = LeveledOpts {
+            base_level_size: 1,
+            num_levels: 5,
+            level_size_multiplier: 2,
+            level0_file_num_compaction_trigger: 1,
+        };
+        let id_generator = Arc::new(SSTableIdGenerator::new(1));
+        let compactor = LevelsCompactor::new_empty(id_generator, level_opts, db_opts.clone());
+
+        let e1 = crate::compact::simple_levels_compactor::tests::new_entry(1, 1);
+        let e2 = crate::compact::simple_levels_compactor::tests::new_entry(2, 2);
+        let e3 = crate::compact::simple_levels_compactor::tests::new_entry(3, 3);
+
+        let sstable1 = create_sstable(&tmp_dir, db_opts.clone(), vec![e1.clone(), e2.clone(), e3.clone()],
+                                      compactor.controller.id_generator.get_new());
+
+        let e4 = crate::compact::simple_levels_compactor::tests::new_entry(4, 4);
+        let e5 = crate::compact::simple_levels_compactor::tests::new_entry(2, 20);
+        let e6 = crate::compact::simple_levels_compactor::tests::new_entry(5, 5);
+
+        let sstable2 = create_sstable(&tmp_dir, db_opts.clone(), vec![e4.clone(), e5.clone(), e6.clone()],
+                                      compactor.controller.id_generator.get_new());
+        
+        println!("{}", compactor.compute_targets());
+        
+        compactor.add_to_l0(sstable1).unwrap();
+        compactor.controller.log_levels();
+        println!("{}", compactor.compute_targets());
+
+        compactor.add_to_l0(sstable2).unwrap();
+        compactor.controller.log_levels();
+        println!("{}", compactor.compute_targets());
+
+        // should be moved and merged to last level
+        let levels = compactor.controller.levels.read().unwrap();
+        assert_eq!(levels.len(), 5);
+        assert_eq!(levels[0].size_on_disk, 0);
+        assert_eq!(levels[1].size_on_disk, 0);
+        assert_eq!(levels[2].size_on_disk, 0);
+        assert_eq!(levels[3].size_on_disk, 0);
+        assert_ne!(levels[4].size_on_disk, 0);
+
+        assert_eq!(levels[0].run.len(), 0);
+        assert_eq!(levels[1].run.len(), 0);
+        assert_eq!(levels[2].run.len(), 0);
+        assert_eq!(levels[3].run.len(), 0);
+        // 2 tables are overlapping and thus merged
+        assert_eq!(levels[4].run.len(), 1);
+        drop(levels);
+
+        let mut iter = compactor.controller.get_iterator();
+        assert_eq!(iter.next(), Some(e1.clone()));
+        assert_eq!(iter.next(), Some(e5.clone()));
+        assert_eq!(iter.next(), Some(e3.clone()));
+        assert_eq!(iter.next(), Some(e4.clone()));
+        assert_eq!(iter.next(), Some(e6.clone()));
+        assert_eq!(iter.next(), None);
+        drop(iter);
+
+        assert_eq!(compactor.controller.get(&e1.key), Some(e1.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e3.key), Some(e3.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e4.key), Some(e4.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e5.key), Some(e5.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e6.key), Some(e6.val_obj.clone()));
+    }
+
+    #[test]
+    fn add_non_overlapping_last_level() {
+        init_log();
+
+        let tmp_dir = tempdir().unwrap();
+        let comparator = Arc::new(BytesI32Comparator {});
+        let db_opts = Arc::new(
+            DbOptions {
+                key_comparator: comparator,
+                sstables_path: tmp_dir.path().to_path_buf(),
+                ..Default::default()
+            }
+        );
+        let level_opts = LeveledOpts {
+            base_level_size: 1,
+            num_levels: 5,
+            level_size_multiplier: 2,
+            level0_file_num_compaction_trigger: 1,
+        };
+        let id_generator = Arc::new(SSTableIdGenerator::new(1));
+        let compactor = LevelsCompactor::new_empty(id_generator, level_opts, db_opts.clone());
+
+        let e1 = crate::compact::simple_levels_compactor::tests::new_entry(1, 1);
+        let e2 = crate::compact::simple_levels_compactor::tests::new_entry(2, 2);
+        let e3 = crate::compact::simple_levels_compactor::tests::new_entry(3, 3);
+
+        let sstable1 = create_sstable(&tmp_dir, db_opts.clone(), vec![e1.clone(), e2.clone(), e3.clone()],
+                                      compactor.controller.id_generator.get_new());
+
+        let e4 = crate::compact::simple_levels_compactor::tests::new_entry(4, 4);
+        let e5 = crate::compact::simple_levels_compactor::tests::new_entry(5, 5);
+        let e6 = crate::compact::simple_levels_compactor::tests::new_entry(6, 6);
+
+        let sstable2 = create_sstable(&tmp_dir, db_opts.clone(), vec![e4.clone(), e5.clone(), e6.clone()],
+                                      compactor.controller.id_generator.get_new());
+
+        println!("{}", compactor.compute_targets());
+
+        compactor.add_to_l0(sstable1).unwrap();
+        compactor.controller.log_levels();
+        println!("{}", compactor.compute_targets());
+
+        compactor.add_to_l0(sstable2).unwrap();
+        compactor.controller.log_levels();
+        println!("{}", compactor.compute_targets());
+
+        // should be moved and merged to last level
+        let levels = compactor.controller.levels.read().unwrap();
+        assert_eq!(levels.len(), 5);
+        
+        assert_eq!(levels[0].run.len(), 0);
+        assert_eq!(levels[1].run.len(), 0);
+        assert_eq!(levels[2].run.len(), 0);
+        assert_eq!(levels[3].run.len(), 0);
+        // 2 tables are non-overlapping and thus not merged
+        assert_eq!(levels[4].run.len(), 2);
+        drop(levels);
+
+        // add to 4 level
+        let sstable3 = create_sstable(&tmp_dir, db_opts.clone(), 
+                                      vec![crate::compact::simple_levels_compactor::tests::new_entry(8, 8)],
+                                      compactor.controller.id_generator.get_new());
+        
+        compactor.add_to_l0(sstable3).unwrap();
+        compactor.controller.log_levels();
+        println!("{}", compactor.compute_targets());
+
+        let levels = compactor.controller.levels.read().unwrap();
+        assert_eq!(levels.len(), 5);
+
+        assert_eq!(levels[0].run.len(), 0);
+        assert_eq!(levels[1].run.len(), 0);
+        assert_eq!(levels[2].run.len(), 0);
+        assert_eq!(levels[3].run.len(), 1);
+        // 2 tables are non-overlapping and thus not merged
+        assert_eq!(levels[4].run.len(), 2);
     }
 }

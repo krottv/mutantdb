@@ -1,3 +1,4 @@
+use std::fmt::format;
 use std::sync::{Arc, RwLock};
 use crate::builder::Builder;
 use crate::compact::level::Level;
@@ -92,5 +93,21 @@ impl LevelsController {
         }
 
         return Ok(tables);
+    }
+
+    pub fn log_levels(&self) {
+        let mut s = String::new();
+        s.push_str("Levels visualized\n");
+
+        for level in self.levels.read().unwrap().iter() {
+            let tables_str= level.run.iter().map(|x| {
+                x.id.to_string()
+            }).collect::<Vec<String>>().join(", ");
+
+            let level_str = format!("level id:{}, size:{}mb. tables [{}]\n", level.id, level.size_on_disk / 1024, tables_str);
+            s.push_str(level_str.as_str());
+        }
+        
+        log::log!(target: "compaction", log::Level::Info, "{}" ,s);
     }
 }
