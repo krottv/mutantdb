@@ -11,6 +11,7 @@ mod core;
 pub mod builder;
 mod iterators;
 mod util;
+pub mod closer;
 
 #[macro_use] extern crate log;
 extern crate simplelog;

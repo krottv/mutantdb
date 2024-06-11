@@ -19,6 +19,7 @@ simplelog = "0.12.2"
 ouroboros = "0.18.4"
 #async
 threadpool = "1.8.1"
+crossbeam-channel = "0.5.13"
 
 #doesn't support an outer comparator, only impl Ord, which is inconvenient to say at least.
 #crossbeam-skiplist = "0.1.3"

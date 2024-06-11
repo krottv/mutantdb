@@ -1,10 +1,11 @@
-use std::sync::{Arc, mpsc, RwLock};
-use std::sync::mpsc::Sender;
+use std::sync::{Arc, RwLock};
 use std::thread::{JoinHandle, spawn};
 
 use bytes::Bytes;
+use crossbeam_channel::{select, Sender};
 
 use crate::builder::Builder;
+use crate::closer::Closer;
 use crate::entry::{Entry, EntryComparator, Key, META_ADD, META_DELETE, ValObj};
 use crate::errors::Error::IllegalState;
 use crate::errors::Result;
@@ -18,6 +19,7 @@ use crate::sstable::SSTable;
 pub struct Core {
     inner: Arc<InnerCore>,
     sx: Option<Sender<()>>,
+    closer: Closer
 }
 
 pub struct InnerCore {
@@ -46,21 +48,26 @@ impl Core {
             Core {
                 inner: Arc::new(inner),
                 sx: None,
+                closer: Closer::new()
             }
         )
     }
 
-    pub fn start_compact_job(&mut self) -> JoinHandle<()> {
-        let (sx, rx) = mpsc::channel();
+    pub fn start_compact_job(&mut self) {
+        let (sx, rx) = crossbeam_channel::unbounded();
         self.sx = Some(sx);
 
         let inner = self.inner.clone();
+        let closer_rx = self.closer.receive.clone();
 
-        spawn(move || {
-            for _nothing in rx.iter() {
-                inner.do_compaction_no_fail();
+        let _handle = spawn(move || {
+            loop {
+                select! {
+                    recv(rx) -> _msg => inner.do_compaction_no_fail(),
+                    recv(closer_rx) -> _msg => break
+                }
             }
-        })
+        });
     }
 
     pub fn notify_memtable_freeze(&self) {
@@ -133,6 +140,12 @@ impl Core {
         }
 
         return levels_val_res;
+    }
+}
+
+impl Drop for Core {
+    fn drop(&mut self) {
+        self.closer.close();
     }
 }
 
