@@ -73,7 +73,10 @@ pub struct LeveledOpts {
 
     pub num_levels: usize,
     
-    pub level0_file_num_compaction_trigger: u32
+    pub level0_file_num_compaction_trigger: u32,
+    
+    // number of threads that can do parallel compaction of non-conflicting levels. Like 1 -> 2 and 3 -> 4
+    pub num_parallel_compact: usize
 }
 
 impl LeveledOpts {
@@ -94,7 +97,9 @@ impl Default for LeveledOpts {
 
             num_levels: 7,
             
-            level0_file_num_compaction_trigger: 5
+            level0_file_num_compaction_trigger: 5,
+            
+            num_parallel_compact: 2
         }
     }
 }

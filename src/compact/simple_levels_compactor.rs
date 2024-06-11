@@ -25,7 +25,7 @@ impl SimpleLevelsCompactor {
         let controller = LevelsController {
             id_generator,
             db_opts,
-            levels: RwLock::new(levels),
+            levels: Arc::new(RwLock::new(levels)),
         };
 
         SimpleLevelsCompactor {
@@ -47,8 +47,9 @@ impl SimpleLevelsCompactor {
         let iterators: Vec<Box<dyn Iterator<Item=Entry>>> = vec![iter1, iter2];
         let total_iter = MergeIterator::new(iterators, entry_comparator);
         // new level
-        
-        let new_tables = self.controller.create_sstables(total_iter)?;
+
+        let new_tables = LevelsController::create_sstables(self.controller.db_opts.clone(),
+                                                           self.controller.id_generator.clone(), total_iter)?;
         let new_level = Level::new(level_id + 1, &new_tables);
 
         // delete old sstables
@@ -331,7 +332,7 @@ pub mod tests {
             num_levels: 2,
             level_size_multiplier: 1,
         };
-        let compactor = SimpleLevelsCompactor::new_empty(id_generator, 
+        let compactor = SimpleLevelsCompactor::new_empty(id_generator,
                                                          level_opts, db_opts.clone());
 
 

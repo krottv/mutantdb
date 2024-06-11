@@ -12,11 +12,13 @@ use crate::errors::Result;
 pub struct LevelsController {
     pub id_generator: Arc<SSTableIdGenerator>,
     pub db_opts: Arc<DbOptions>,
-    pub levels: RwLock<Vec<Level>>,
+    // since it is modified only in compaction thread.
+    // compaction threads reads can be released as soon as possible without any races.
+    // reads in Core should hold lock for the whole needed duration.
+    pub levels: Arc<RwLock<Vec<Level>>>,
 }
 
 impl LevelsController {
-    
     pub fn get(&self, key: &Key) -> Option<ValObj> {
         let levels = self.levels.read().unwrap();
         for level in levels.iter() {
@@ -62,24 +64,24 @@ impl LevelsController {
     }
 
 
-    fn new_builder(&self) -> Result<Builder> {
-        let sstable_id = self.id_generator.get_new();
-        let path = self.db_opts.sstables_path.join(SSTable::create_path(sstable_id));
-        Builder::new(path, self.db_opts.clone(), self.db_opts.block_max_size as usize, sstable_id)
+    fn new_builder(db_opts: Arc<DbOptions>, id_generator: Arc<SSTableIdGenerator>) -> Result<Builder> {
+        let sstable_id = id_generator.get_new();
+        let path = db_opts.sstables_path.join(SSTable::create_path(sstable_id));
+        Builder::new(path, db_opts.clone(), db_opts.block_max_size as usize, sstable_id)
     }
-    
-    pub fn create_sstables(&self, iterator: MergeIterator<Entry>) -> Result<Vec<Arc<SSTable>>> {
-        let mut builder = self.new_builder()?;
+
+    pub fn create_sstables(db_opts: Arc<DbOptions>, id_generator: Arc<SSTableIdGenerator>, iterator: MergeIterator<Entry>) -> Result<Vec<Arc<SSTable>>> {
+        let mut builder = Self::new_builder(db_opts.clone(), id_generator.clone())?;
         let mut builder_entries_size: u64 = 0;
         let mut tables = Vec::new();
 
         for entry in iterator {
             let entry_size = entry.get_encoded_size_entry();
 
-            if (builder_entries_size + entry_size as u64) > self.db_opts.max_memtable_size {
+            if (builder_entries_size + entry_size as u64) > db_opts.max_memtable_size {
                 let table = builder.build()?;
                 tables.push(Arc::new(table));
-                builder = self.new_builder()?;
+                builder = Self::new_builder(db_opts.clone(), id_generator.clone())?;
                 builder_entries_size = 0;
             }
 
@@ -100,14 +102,14 @@ impl LevelsController {
         s.push_str("Levels visualized\n");
 
         for level in self.levels.read().unwrap().iter() {
-            let tables_str= level.run.iter().map(|x| {
+            let tables_str = level.run.iter().map(|x| {
                 x.id.to_string()
             }).collect::<Vec<String>>().join(", ");
 
             let level_str = format!("level id:{}, size:{}mb. tables [{}]\n", level.id, level.size_on_disk / 1024, tables_str);
             s.push_str(level_str.as_str());
         }
-        
+
         log::log!(target: "compaction", log::Level::Info, "{}" ,s);
     }
 }
