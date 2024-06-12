@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::fmt::format;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -14,7 +15,7 @@ use crate::sstable::SSTable;
 
 #[derive(Clone)]
 pub struct Level {
-    // sorted except first level. Size is at least 2 guaranteed
+    // sorted except first level.
     pub run: VecDeque<Arc<SSTable>>,
     // id of the level
     pub id: usize,
@@ -47,6 +48,38 @@ impl Level {
         }
 
         self.size_on_disk = size_on_disk;
+    }
+    
+    pub fn sort_tables(&mut self, key_comparator: &dyn KeyComparator<Bytes>) {
+        if self.id == 0 {
+            // todo: test sort order
+            self.run.make_contiguous().sort_unstable_by(|x, y| {
+                y.id.cmp(&x.id)
+            });
+        } else {
+            self.run.make_contiguous().sort_unstable_by(|x, y| {
+                // since keys are non-overlapping, order doesn't matter
+                key_comparator.compare(&x.first_key, &y.first_key)
+            });
+        }
+    }
+    
+    pub fn validate(&self, key_comparator: &dyn KeyComparator<Bytes>) {
+        // check overlapping intervals
+        if self.id != 0 && !self.run.is_empty() {
+            let mut prev_right = &Bytes::new();
+            
+            for (index, table) in self.run.iter().enumerate() {
+                if index != 0 && key_comparator.compare(&table.first_key, prev_right).is_le() {
+                    panic!("overlapping sstable keys on level {}, table_id {}", self.id, table.id)
+                } else if key_comparator.compare(&table.last_key, &table.first_key).is_lt() {
+                    panic!("invalid table key right < left on level {}, table_id {}", self.id, table.id)
+                }
+                else {
+                    prev_right = &table.last_key;
+                }
+            }
+        }
     }
 
     pub fn new(id: usize, tables: &[Arc<SSTable>]) -> Level {

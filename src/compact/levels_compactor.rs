@@ -44,24 +44,26 @@ pub struct LevelsCompactor {
 }
 
 impl LevelsCompactor {
-    pub fn new_empty(id_generator: Arc<SSTableIdGenerator>, level_opts: LeveledOpts, db_opts: Arc<DbOptions>) -> Self {
+    pub fn open(id_generator: Arc<SSTableIdGenerator>, level_opts: LeveledOpts, db_opts: Arc<DbOptions>) -> Result<Self> {
         let mut levels = Vec::with_capacity(level_opts.num_levels);
         for i in 0..level_opts.num_levels {
             levels.push(Level::new_empty(i));
         }
 
-        let controller = LevelsController {
-            id_generator,
-            db_opts,
-            levels: Arc::new(RwLock::new(levels)),
-        };
+        let controller = LevelsController::open(
+            db_opts.clone(),
+            id_generator.clone(),
+            level_opts.num_levels
+        )?;
 
         let pool = ThreadPool::new(level_opts.num_parallel_compact);
-        LevelsCompactor {
-            level_opts: Arc::new(level_opts),
-            controller,
-            pool,
-        }
+        Ok(
+            LevelsCompactor {
+                level_opts: Arc::new(level_opts),
+                controller,
+                pool,
+            }
+        )
     }
 
     fn execute_priority(&self, priority: LevelPriority) -> Result<()> {
@@ -99,14 +101,12 @@ impl LevelsCompactor {
     fn spawn_execute_priority_task(pool: &ThreadPool, priority: LevelPriority, levels_lock: Arc<RwLock<Vec<Level>>>,
                                    db_opts: Arc<DbOptions>, id_generator: Arc<SSTableIdGenerator>,
                                    from_sstables: Vec<Arc<SSTable>>, to_sstables: Vec<Arc<SSTable>>) {
-        
         pool.execute(move || {
             let total_iter = Self::create_iterator_for_tables(db_opts.clone(),
                                                               priority.from_level_id, priority.to_level_id, &from_sstables, &to_sstables);
             let new_tables_res = LevelsController::create_sstables(db_opts.clone(), id_generator.clone(), total_iter);
-            
+
             if let Ok(new_tables) = new_tables_res {
-                
                 let keys_to_remove_to: HashSet<usize> = to_sstables.iter().map(|x| {
                     x.id
                 }).collect();
@@ -128,7 +128,7 @@ impl LevelsCompactor {
                     sstable.mark_delete()
                 }
             } else {
-                log::log!(log::Level::Warn, "compaction new tables generation error")
+                log::log!(log::Level::Warn, "compaction new tables generation error {}", new_tables_res.err().unwrap())
             }
         });
     }
@@ -143,7 +143,7 @@ impl LevelsCompactor {
         for priority in priorities {
             self.execute_priority(priority)?;
         }
-        
+
         // only one compaction process at a time. Only different levels are parallelized.
         self.pool.join();
 
@@ -238,16 +238,13 @@ impl LevelsCompactor {
             to_tables_complete.push_back(new_table);
         }
 
-        to_tables_complete.make_contiguous().sort_unstable_by(|x, y| {
-            // since keys are non-overlapping, order doesn't matter
-            db_opts.key_comparator.compare(&x.first_key, &y.first_key)
-        });
         let mut new_level_to = Level {
             run: to_tables_complete,
             id: to_level_id,
             size_on_disk: 0,
         };
         new_level_to.calc_size_on_disk();
+        new_level_to.sort_tables(db_opts.key_comparator.as_ref());
 
         // write new levels
         let mut levels = levels_lock.write().unwrap();
@@ -365,7 +362,7 @@ mod tests {
             DbOptions::default()
         );
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
-        let compactor = LevelsCompactor::new_empty(id_generator, level_opts, db_opts);
+        let compactor = LevelsCompactor::open(id_generator, level_opts, db_opts).unwrap();
 
         let any_key = Bytes::from("key1");
         assert_eq!(compactor.controller.get(&any_key), None);
@@ -482,7 +479,7 @@ mod tests {
             }
         );
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
-        let compactor = LevelsCompactor::new_empty(id_generator.clone(), level_opts, db_opts.clone());
+        let compactor = LevelsCompactor::open(id_generator.clone(), level_opts, db_opts.clone()).unwrap();
 
         {
             let mut levels = compactor.controller.levels.write().unwrap();
@@ -525,7 +522,7 @@ mod tests {
             }
         );
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
-        let compactor = LevelsCompactor::new_empty(id_generator.clone(), level_opts, db_opts.clone());
+        let compactor = LevelsCompactor::open(id_generator.clone(), level_opts, db_opts.clone()).unwrap();
 
         {
             let mut levels = compactor.controller.levels.write().unwrap();
@@ -569,7 +566,7 @@ mod tests {
             }
         );
         let id_generator = Arc::new(SSTableIdGenerator::new(0));
-        let compactor = LevelsCompactor::new_empty(id_generator.clone(), level_opts, db_opts.clone());
+        let compactor = LevelsCompactor::open(id_generator.clone(), level_opts, db_opts.clone()).unwrap();
 
         {
             let mut levels = compactor.controller.levels.write().unwrap();
@@ -626,7 +623,7 @@ mod tests {
             ..Default::default()
         };
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
-        let compactor = LevelsCompactor::new_empty(id_generator, level_opts, db_opts.clone());
+        let compactor = LevelsCompactor::open(id_generator, level_opts, db_opts.clone()).unwrap();
 
         let e1 = crate::compact::simple_levels_compactor::tests::new_entry(1, 1);
         let e2 = crate::compact::simple_levels_compactor::tests::new_entry(2, 2);
@@ -706,7 +703,7 @@ mod tests {
             ..Default::default()
         };
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
-        let compactor = LevelsCompactor::new_empty(id_generator, level_opts, db_opts.clone());
+        let compactor = LevelsCompactor::open(id_generator, level_opts, db_opts.clone()).unwrap();
 
         let e1 = crate::compact::simple_levels_compactor::tests::new_entry(1, 1);
         let e2 = crate::compact::simple_levels_compactor::tests::new_entry(2, 2);

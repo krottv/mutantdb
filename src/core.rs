@@ -10,7 +10,7 @@ use crate::entry::{Entry, EntryComparator, Key, META_ADD, META_DELETE, ValObj};
 use crate::errors::Error::IllegalState;
 use crate::errors::Result;
 use crate::iterators::merge_iterator::MergeIterator;
-use crate::compact::{create_compactor, Compactor};
+use crate::compact::{open_compactor, Compactor};
 use crate::memtables::Memtables;
 use crate::db_options::{DbOptions};
 use crate::sstable::id_generator::SSTableIdGenerator;
@@ -37,7 +37,7 @@ impl Core {
         // todo: set right id after restoring the manifest.
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
 
-        let compactor = create_compactor(id_generator.clone(), db_opts.clone());
+        let compactor = open_compactor(id_generator.clone(), db_opts.clone())?;
 
         let inner = InnerCore {
             db_opts,

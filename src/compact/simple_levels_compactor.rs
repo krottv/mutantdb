@@ -1,12 +1,15 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use proto::meta::ManifestChange;
 
 use crate::compact::{Compactor, SimpleLeveledOpts};
 use crate::compact::level::Level;
 use crate::compact::levels_controller::LevelsController;
+use crate::db_options::DbOptions;
 use crate::entry::{Entry, EntryComparator};
 use crate::errors::Result;
 use crate::iterators::merge_iterator::MergeIterator;
-use crate::db_options::{DbOptions};
+use crate::manifest::Manifest;
 use crate::sstable::id_generator::SSTableIdGenerator;
 use crate::sstable::SSTable;
 
@@ -16,25 +19,23 @@ pub struct SimpleLevelsCompactor {
 }
 
 impl SimpleLevelsCompactor {
-    pub fn new_empty(id_generator: Arc<SSTableIdGenerator>, level_opts: SimpleLeveledOpts, db_opts: Arc<DbOptions>) -> Self {
+    pub fn open(id_generator: Arc<SSTableIdGenerator>, level_opts: SimpleLeveledOpts, db_opts: Arc<DbOptions>) -> Result<Self> {
         let mut levels = Vec::with_capacity(level_opts.num_levels);
         for i in 0..level_opts.num_levels {
             levels.push(Level::new_empty(i));
         }
 
-        let controller = LevelsController {
-            id_generator,
-            db_opts,
-            levels: Arc::new(RwLock::new(levels)),
-        };
+        let controller = LevelsController::open(db_opts.clone(),
+                                                id_generator.clone(), level_opts.num_levels)?;
 
-        SimpleLevelsCompactor {
-            level_opts,
-            controller,
-        }
+        Ok(
+            SimpleLevelsCompactor {
+                level_opts,
+                controller,
+            })
     }
 
-    fn force_compact(&self, level_id: usize) -> Result<()> {
+    fn force_compact(&self, level_id: usize) -> Result<Vec<ManifestChange>> {
         let levels = self.controller.levels.read().unwrap();
         // merge current level and the next level; which is guaranteed to be present.
         let entry_comparator = Arc::new(EntryComparator::new(self.controller.db_opts.key_comparator.clone()));
@@ -50,14 +51,22 @@ impl SimpleLevelsCompactor {
 
         let new_tables = LevelsController::create_sstables(self.controller.db_opts.clone(),
                                                            self.controller.id_generator.clone(), total_iter)?;
+        
+        let mut changes = Vec::new();
+        for new_table in &new_tables {
+            changes.push(Manifest::new_change_add(new_table.id as u64, level_id + 1));
+        }
+        
         let new_level = Level::new(level_id + 1, &new_tables);
 
         // delete old sstables
         for sstable in level1.run.iter() {
-            sstable.mark_delete()
+            sstable.mark_delete();
+            changes.push(Manifest::new_change_delete(sstable.id as u64));
         }
         for sstable in level2.run.iter() {
-            sstable.mark_delete()
+            sstable.mark_delete();
+            changes.push(Manifest::new_change_delete(sstable.id as u64));
         }
 
         // if not dropped, then it would deadlock.
@@ -68,17 +77,16 @@ impl SimpleLevelsCompactor {
             levels[level_id] = Level::new_empty(level_id);
             levels[level_id + 1] = new_level;
         }
-
-        // check for the next level
-        return self.check_compact(level_id + 1);
+        
+        Ok(changes)
     }
 
-    fn check_compact(&self, level_id: usize) -> Result<()> {
+    fn need_compact(&self, level_id: usize) -> bool {
         let levels = self.controller.levels.read().unwrap();
 
         // skip if it's the last level
         if level_id >= (levels.len() - 1) {
-            return Ok(());
+            return false;
         }
 
         let level_max_size = self.level_opts.base_level_size * (self.level_opts.level_size_multiplier as u64)
@@ -86,11 +94,10 @@ impl SimpleLevelsCompactor {
         let cur_level = levels.get(level_id).unwrap();
 
         if cur_level.size_on_disk < level_max_size {
-            return Ok(());
+            return false;
         }
-        drop(levels);
 
-        self.force_compact(level_id)
+        return true
     }
 }
 
@@ -101,7 +108,15 @@ impl Compactor for SimpleLevelsCompactor {
             self.controller.levels.write().unwrap().get_mut(0)
                 .unwrap().add(sstable_arc);
         }
-        self.check_compact(0)?;
+        
+        let mut level_id = 0usize;
+        while level_id < self.level_opts.num_levels && self.need_compact(level_id) {
+            let changes = self.force_compact(level_id)?;
+            self.controller.manifest_writer.lock()
+                .unwrap().write(changes)?;
+            level_id += 1;
+        }
+        self.controller.sync_dir()?;
 
         return Ok(());
     }
@@ -133,8 +148,8 @@ pub mod tests {
     use crate::compact::{Compactor, SimpleLeveledOpts};
     use crate::compact::simple_levels_compactor::SimpleLevelsCompactor;
     use crate::comparator::BytesI32Comparator;
+    use crate::db_options::DbOptions;
     use crate::entry::{Entry, META_ADD, ValObj};
-    use crate::db_options::{DbOptions};
     use crate::sstable::id_generator::SSTableIdGenerator;
     use crate::sstable::tests::create_sstable;
 
@@ -152,12 +167,17 @@ pub mod tests {
 
     #[test]
     fn empty() {
+        let tmp_dir = tempdir().unwrap();
         let level_opts = SimpleLeveledOpts::default();
         let db_opts = Arc::new(
-            DbOptions::default()
+            DbOptions {
+                path: tmp_dir.path().to_path_buf(),
+                ..Default::default()
+            }
         );
+        db_opts.create_dirs().unwrap();
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
-        let compactor = SimpleLevelsCompactor::new_empty(id_generator, level_opts, db_opts);
+        let compactor = SimpleLevelsCompactor::open(id_generator, level_opts, db_opts).unwrap();
 
         let any_key = Bytes::from("key1");
         assert_eq!(compactor.controller.get(&any_key), None);
@@ -178,14 +198,14 @@ pub mod tests {
             }
         );
         db_opts.create_dirs().unwrap();
-        
+
         let level_opts = SimpleLeveledOpts {
             base_level_size: 1,
             num_levels: 3,
             level_size_multiplier: 1,
         };
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
-        let compactor = SimpleLevelsCompactor::new_empty(id_generator, level_opts, db_opts.clone());
+        let mut compactor = SimpleLevelsCompactor::open(id_generator.clone(), level_opts.clone(), db_opts.clone()).unwrap();
 
         let e1 = new_entry(1, 1);
         let e2 = new_entry(2, 2);
@@ -230,6 +250,36 @@ pub mod tests {
         assert_eq!(compactor.controller.get(&e4.key), Some(e4.val_obj.clone()));
         assert_eq!(compactor.controller.get(&e5.key), Some(e5.val_obj.clone()));
         assert_eq!(compactor.controller.get(&e6.key), Some(e6.val_obj.clone()));
+        
+        // reopen 
+        drop(compactor);
+        compactor = SimpleLevelsCompactor::open(id_generator, level_opts.clone(), db_opts.clone()).unwrap();
+
+        let levels = compactor.controller.levels.read().unwrap();
+        assert_eq!(levels.len(), 3);
+        assert_eq!(levels[0].size_on_disk, 0);
+        assert_eq!(levels[1].size_on_disk, 0);
+        assert_ne!(levels[2].size_on_disk, 0);
+
+        assert_eq!(levels[0].run.len(), 0);
+        assert_eq!(levels[1].run.len(), 0);
+        assert_eq!(levels[2].run.len(), 1);
+        drop(levels);
+
+        let mut iter = compactor.controller.get_iterator();
+        assert_eq!(iter.next(), Some(e1.clone()));
+        assert_eq!(iter.next(), Some(e5.clone()));
+        assert_eq!(iter.next(), Some(e3.clone()));
+        assert_eq!(iter.next(), Some(e4.clone()));
+        assert_eq!(iter.next(), Some(e6.clone()));
+        assert_eq!(iter.next(), None);
+        drop(iter);
+
+        assert_eq!(compactor.controller.get(&e1.key), Some(e1.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e3.key), Some(e3.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e4.key), Some(e4.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e5.key), Some(e5.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e6.key), Some(e6.val_obj.clone()));
     }
 
     #[test]
@@ -244,15 +294,15 @@ pub mod tests {
             }
         );
         db_opts.create_dirs().unwrap();
-        
+
         let level_opts = SimpleLeveledOpts {
             base_level_size: 1000000,
             num_levels: 3,
             level_size_multiplier: 1,
         };
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
-        let compactor = SimpleLevelsCompactor::new_empty(id_generator, level_opts,
-                                                         db_opts.clone());
+        let compactor = SimpleLevelsCompactor::open(id_generator, level_opts,
+                                                    db_opts.clone()).unwrap();
 
         let e1 = new_entry(1, 1);
         let e2 = new_entry(2, 2);
@@ -337,8 +387,8 @@ pub mod tests {
             num_levels: 2,
             level_size_multiplier: 1,
         };
-        let compactor = SimpleLevelsCompactor::new_empty(id_generator,
-                                                         level_opts, db_opts.clone());
+        let compactor = SimpleLevelsCompactor::open(id_generator,
+                                                    level_opts, db_opts.clone()).unwrap();
 
 
         compactor.add_to_l0(sstable1).unwrap();

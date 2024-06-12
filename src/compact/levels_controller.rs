@@ -1,5 +1,5 @@
 use std::fmt::format;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use crate::builder::Builder;
 use crate::compact::level::Level;
 use crate::entry::{Entry, EntryComparator, Key, ValObj};
@@ -8,6 +8,9 @@ use crate::db_options::DbOptions;
 use crate::sstable::id_generator::SSTableIdGenerator;
 use crate::sstable::SSTable;
 use crate::errors::Result;
+use crate::manifest;
+use crate::manifest::ManifestWriter;
+use crate::util::sync_dir;
 
 pub struct LevelsController {
     pub id_generator: Arc<SSTableIdGenerator>,
@@ -16,9 +19,58 @@ pub struct LevelsController {
     // compaction threads reads can be released as soon as possible without any races.
     // reads in Core should hold lock for the whole needed duration.
     pub levels: Arc<RwLock<Vec<Level>>>,
+    // not necessary thou because write only from single thread
+    pub manifest_writer: Mutex<ManifestWriter>
 }
 
 impl LevelsController {
+    
+    // restores manifest
+    pub fn open(db_opts: Arc<DbOptions>, id_generator: Arc<SSTableIdGenerator>,
+                num_levels: usize) -> Result<Self> {
+        let (manifest_writer, manifest) = ManifestWriter::open(db_opts.clone())?;
+
+        let mut levels = Vec::with_capacity(num_levels);
+        for i in 0..num_levels {
+            levels.push(Level::new_empty(i));
+        }
+        
+        // todo: parallelize opening
+        for (table_id, level_id) in &manifest.tables {
+            if *level_id < levels.len() {
+                let sstable_path = db_opts.sstables_path().join(SSTable::create_path(*table_id as usize));
+                
+                if let Ok(sstable) = SSTable::open(sstable_path, db_opts.clone(), *table_id as usize) {
+                    levels[*level_id].add(Arc::new(sstable));
+                } else {
+                    log::log!(log::Level::Warn, "can't restore sstable with id {}", *table_id);
+                }
+            }
+        }
+        
+        for level in &mut levels {
+            level.sort_tables(db_opts.key_comparator.as_ref());
+            level.validate(db_opts.key_comparator.as_ref());
+        }
+        
+        Ok(
+            LevelsController {
+                id_generator,
+                db_opts,
+                levels: Arc::new(RwLock::new(levels)),
+                manifest_writer: Mutex::new(manifest_writer)
+            }
+        )
+    }
+    
+    // todo: really all dirs?
+    pub fn sync_dir(&self) -> Result<()> {
+        sync_dir(&self.db_opts.path)?;
+        sync_dir(&self.db_opts.sstables_path())?;
+        sync_dir(&self.db_opts.wal_path())?;
+        Ok(())
+    }
+    
     pub fn get(&self, key: &Key) -> Option<ValObj> {
         let levels = self.levels.read().unwrap();
         for level in levels.iter() {

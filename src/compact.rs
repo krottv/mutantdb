@@ -28,22 +28,26 @@ pub trait Compactor: Send + Sync {
 }
 
 
-pub(crate) fn create_compactor(id_generator: Arc<SSTableIdGenerator>,
-                               db_opts: Arc<DbOptions>) -> Box<dyn Compactor> {
+pub(crate) fn open_compactor(id_generator: Arc<SSTableIdGenerator>,
+                             db_opts: Arc<DbOptions>) -> Result<Box<dyn Compactor>> {
     db_opts.compaction.validate();
     
-    match db_opts.compaction.as_ref() {
+    let compactor: Box<dyn Compactor> = match db_opts.compaction.as_ref() {
         CompactionOptions::SimpleLeveled(level_opts) => {
             Box::new(
-                SimpleLevelsCompactor::new_empty(id_generator, level_opts.clone(), db_opts)
+                SimpleLevelsCompactor::open(id_generator, level_opts.clone(), db_opts)?
             )
         }
         CompactionOptions::Leveled(level_opts) => {
             Box::new(
-                LevelsCompactor::new_empty(id_generator, level_opts.clone(), db_opts)
+                LevelsCompactor::open(id_generator, level_opts.clone(), db_opts)?
             )
         }
-    }
+    };
+    
+    Ok(
+        compactor
+    )
 }
 
 pub enum CompactionOptions {
