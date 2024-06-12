@@ -66,7 +66,7 @@ impl LevelsController {
 
     fn new_builder(db_opts: Arc<DbOptions>, id_generator: Arc<SSTableIdGenerator>) -> Result<Builder> {
         let sstable_id = id_generator.get_new();
-        let path = db_opts.sstables_path.join(SSTable::create_path(sstable_id));
+        let path = db_opts.sstables_path().join(SSTable::create_path(sstable_id));
         Builder::new(path, db_opts.clone(), db_opts.block_max_size as usize, sstable_id)
     }
 

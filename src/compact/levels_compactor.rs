@@ -614,7 +614,7 @@ mod tests {
         let db_opts = Arc::new(
             DbOptions {
                 key_comparator: comparator,
-                sstables_path: tmp_dir.path().to_path_buf(),
+                path: tmp_dir.path().to_path_buf(),
                 ..Default::default()
             }
         );
@@ -694,7 +694,7 @@ mod tests {
         let db_opts = Arc::new(
             DbOptions {
                 key_comparator: comparator,
-                sstables_path: tmp_dir.path().to_path_buf(),
+                path: tmp_dir.path().to_path_buf(),
                 ..Default::default()
             }
         );

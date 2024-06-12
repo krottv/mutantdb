@@ -1,5 +1,5 @@
 use std::sync::{Arc, RwLock};
-use std::thread::{JoinHandle, spawn};
+use std::thread::{spawn};
 
 use bytes::Bytes;
 use crossbeam_channel::{select, Sender};
@@ -31,6 +31,8 @@ pub struct InnerCore {
 
 impl Core {
     pub fn new(db_opts: Arc<DbOptions>) -> Result<Self> {
+        db_opts.create_dirs()?;
+        
         let memtables = RwLock::new(Memtables::open(db_opts.clone())?);
         // todo: set right id after restoring the manifest.
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
@@ -170,7 +172,7 @@ impl InnerCore {
             if let Some(memtable) = self.memtables.read().unwrap().get_back() {
                 memtable.truncate()?;
                 let new_id = self.id_generator.get_new();
-                let sstable_path = self.db_opts.sstables_path.join(SSTable::create_path(new_id));
+                let sstable_path = self.db_opts.sstables_path().join(SSTable::create_path(new_id));
                 let sstable = Builder::build_from_memtable(memtable.clone(), sstable_path, self.db_opts.clone(), new_id)?;
                 self.compactor.add_to_l0(sstable)?;
             } else {
@@ -233,8 +235,7 @@ pub mod tests {
         let comparator = Arc::new(BytesI32Comparator {});
         let db_opts = Arc::new(
             DbOptions {
-                wal_path: tmp_dir.path().join("wal"),
-                sstables_path: tmp_dir.path().join("mem"),
+                path: tmp_dir.path().to_path_buf(),
                 key_comparator: comparator,
                 max_memtable_size: 1,
                 compaction: Arc::new(CompactionOptions::SimpleLeveled(SimpleLeveledOpts {
@@ -245,8 +246,8 @@ pub mod tests {
                 ..Default::default()
             }
         );
-        std::fs::create_dir_all(&db_opts.wal_path).unwrap();
-        std::fs::create_dir_all(&db_opts.sstables_path).unwrap();
+        std::fs::create_dir_all(&db_opts.wal_path()).unwrap();
+        std::fs::create_dir_all(&db_opts.sstables_path()).unwrap();
 
         let mut core = Core::new(db_opts).unwrap();
         let _handle = core.start_compact_job();
@@ -280,8 +281,7 @@ pub mod tests {
         let comparator = Arc::new(BytesI32Comparator {});
         let db_opts = Arc::new(
             DbOptions {
-                wal_path: tmp_dir.path().join("wal"),
-                sstables_path: tmp_dir.path().join("mem"),
+                path: tmp_dir.path().to_path_buf(),
                 key_comparator: comparator,
                 max_memtable_size: 1,
                 compaction: Arc::new(CompactionOptions::SimpleLeveled(SimpleLeveledOpts {
@@ -292,8 +292,8 @@ pub mod tests {
                 ..Default::default()
             }
         );
-        std::fs::create_dir_all(&db_opts.wal_path).unwrap();
-        std::fs::create_dir_all(&db_opts.sstables_path).unwrap();
+        std::fs::create_dir_all(&db_opts.wal_path()).unwrap();
+        std::fs::create_dir_all(&db_opts.sstables_path()).unwrap();
 
         let core = Core::new(db_opts).unwrap();
 
@@ -349,8 +349,7 @@ pub mod tests {
         let comparator = Arc::new(BytesI32Comparator {});
         let db_opts = Arc::new(
             DbOptions {
-                wal_path: tmp_dir.path().join("wal"),
-                sstables_path: tmp_dir.path().join("mem"),
+                path: tmp_dir.path().to_path_buf(),
                 key_comparator: comparator,
                 max_memtable_size: 1,
                 compaction: Arc::new(CompactionOptions::SimpleLeveled(SimpleLeveledOpts {
@@ -361,8 +360,8 @@ pub mod tests {
                 ..Default::default()
             }
         );
-        std::fs::create_dir_all(&db_opts.wal_path).unwrap();
-        std::fs::create_dir_all(&db_opts.sstables_path).unwrap();
+        std::fs::create_dir_all(&db_opts.wal_path()).unwrap();
+        std::fs::create_dir_all(&db_opts.sstables_path()).unwrap();
 
         let core = Core::new(db_opts).unwrap();
 

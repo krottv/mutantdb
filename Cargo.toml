@@ -17,6 +17,7 @@ rand = "0.8.5"
 log = { version = "0.4.21", features = ["std"] }
 simplelog = "0.12.2"
 ouroboros = "0.18.4"
+crc32fast = "1.4.2"
 #async
 threadpool = "1.8.1"
 crossbeam-channel = "0.5.13"

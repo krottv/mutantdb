@@ -173,10 +173,12 @@ pub mod tests {
         let db_opts = Arc::new(
             DbOptions {
                 key_comparator: comparator,
-                sstables_path: tmp_dir.path().to_path_buf(),
+                path: tmp_dir.path().to_path_buf(),
                 ..Default::default()
             }
         );
+        db_opts.create_dirs().unwrap();
+        
         let level_opts = SimpleLeveledOpts {
             base_level_size: 1,
             num_levels: 3,
@@ -237,10 +239,12 @@ pub mod tests {
         let db_opts = Arc::new(
             DbOptions {
                 key_comparator: comparator,
-                sstables_path: tmp_dir.path().to_path_buf(),
+                path: tmp_dir.path().to_path_buf(),
                 ..Default::default()
             }
         );
+        db_opts.create_dirs().unwrap();
+        
         let level_opts = SimpleLeveledOpts {
             base_level_size: 1000000,
             num_levels: 3,
@@ -302,10 +306,11 @@ pub mod tests {
         let db_opts = Arc::new(
             DbOptions {
                 key_comparator: comparator,
-                sstables_path: tmp_dir.path().to_path_buf(),
+                path: tmp_dir.path().to_path_buf(),
                 ..Default::default()
             }
         );
+        db_opts.create_dirs().unwrap();
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
 
         let e1 = new_entry(1, 1);

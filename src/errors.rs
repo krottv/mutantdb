@@ -24,7 +24,10 @@ pub enum Error {
     AbsentKey,
 
     #[error("illegal state {0}")]
-    IllegalState(String)
+    IllegalState(String),
+    
+    #[error("Expected version {0}")]
+    ManifestFormatVersionErr(u32)
 }
 
 impl From<io::Error> for Error {

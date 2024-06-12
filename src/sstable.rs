@@ -256,7 +256,7 @@ impl SSTable {
 
 impl Drop for SSTable {
     fn drop(&mut self) {
-        no_fail(self.drop_no_fail(), format!("Drop sstable").as_str())
+        no_fail(self.drop_no_fail(), "Drop sstable")
     }
 }
 

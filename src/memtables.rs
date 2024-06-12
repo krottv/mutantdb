@@ -24,9 +24,9 @@ impl Memtables {
     
     // can be extracted to WAL manager like in Rocks db, but not too much code yet here.
     pub fn open(opts: Arc<DbOptions>) -> Result<Memtables> {
-        std::fs::create_dir_all(&opts.wal_path)?;
+        std::fs::create_dir_all(&opts.wal_path())?;
         
-        let wal_folder = std::fs::read_dir(&opts.wal_path)?;
+        let wal_folder = std::fs::read_dir(&opts.wal_path())?;
         let mut memtables = VecDeque::new();
         
         for file_res in wal_folder {
@@ -56,7 +56,8 @@ impl Memtables {
         if let Some(mutable_tmp) = memtables.pop_back() {
             mutable = mutable_tmp;
         } else {
-            mutable = Arc::new(Memtable::new(1, opts.wal_path.join(Self::id_to_name(1)), opts.clone())?);
+            mutable = Arc::new(Memtable::new(1, opts.wal_path()
+                .join(Self::id_to_name(1)), opts.clone())?);
         }
         
         return Ok(
@@ -75,7 +76,7 @@ impl Memtables {
     fn next_path(&self) -> PathBuf {
         let next_id = self.mutable.id + 1;
         let next_path = Self::id_to_name(next_id);
-        return self.opts.wal_path.join(next_path)
+        return self.opts.wal_path().join(next_path)
     }
 
     pub fn get(&self, key: &Bytes) -> Option<ValObj> {
@@ -207,16 +208,17 @@ mod tests {
         
         let comparator = BytesStringUtf8Comparator { };
         let tmp_dir = tempdir().unwrap();
-        let wal_path = tmp_dir.path().join("wals");
-        fs::create_dir_all(&wal_path).unwrap();
+        let path = tmp_dir.path().to_path_buf();
         
         let opts = Arc::new(DbOptions {
             max_wal_size: 1000,
             max_memtable_size: 1000,
             key_comparator: Arc::new(comparator),
-            wal_path,
+            path,
             ..Default::default()
         });
+
+        fs::create_dir_all(&opts.wal_path()).unwrap();
         
         let memtables = Memtables::open(opts).unwrap();
         
@@ -242,16 +244,16 @@ mod tests {
         
         let comparator = BytesStringUtf8Comparator { };
         let tmp_dir = tempdir().unwrap();
-        let wal_path = tmp_dir.path().join("wals");
-        fs::create_dir_all(&wal_path).unwrap();
+        let path = tmp_dir.path().to_path_buf();
         
         let opts = Arc::new(DbOptions {
             max_wal_size: 1000,
             max_memtable_size: 1000,
             key_comparator: Arc::new(comparator),
-            wal_path,
+            path,
             ..Default::default()
         });
+        fs::create_dir_all(&opts.wal_path()).unwrap();
         
         let mut memtables = Memtables::open(opts.clone()).unwrap();
         
@@ -274,17 +276,17 @@ mod tests {
         
         let comparator = BytesStringUtf8Comparator { };
         let tmp_dir = tempdir().unwrap();
-        let wal_path = tmp_dir.path().join("wals");
-        fs::create_dir_all(&wal_path).unwrap();
+        let path = tmp_dir.path().to_owned();
         
         // 0 size makes everything opening a few times.
         let opts = Arc::new(DbOptions {
             max_wal_size: 0,
             max_memtable_size: 0,
             key_comparator: Arc::new(comparator),
-            wal_path,
+            path,
             ..Default::default()
         });
+        fs::create_dir_all(&opts.wal_path()).unwrap();
         
         let mut memtables = Memtables::open(opts.clone()).unwrap();
         

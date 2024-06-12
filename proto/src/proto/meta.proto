@@ -18,3 +18,18 @@ message TableIndex {
   uint64 max_version = 2;
   uint64 key_count = 3;
 }
+
+message ManifestChangeSet {
+  repeated ManifestChange changes = 1;
+}
+
+message ManifestChange {
+  fixed64 table_id = 1;
+  fixed32 level_id = 2; // only for add
+  ManifestOperation operation = 3;
+}
+
+enum ManifestOperation {
+  ADD = 0;
+  DELETE = 1;
+}
