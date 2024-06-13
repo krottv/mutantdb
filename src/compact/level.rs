@@ -1,6 +1,5 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::fmt::format;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -140,31 +139,37 @@ impl Level {
         None
     }
 
-    fn get_val_lx(&self, key: &Key, key_comparator: Arc<dyn KeyComparator<Key>>) -> Option<ValObj> {
+    fn get_sstable_of_sorted(&self, key: &Key, key_comparator: &dyn KeyComparator<Key>) -> Option<&SSTable> {
         let bsearch_res = self.run.binary_search_by(|x| {
-            let cmp_first = key_comparator.compare(key, &x.first_key);
-            if cmp_first.is_lt() {
-                return Ordering::Less;
-            }
+            let cmp_first = key_comparator.compare(&x.first_key, key);
+            let cmp_last = key_comparator.compare(&x.last_key, key);
 
-            let cmp_last = key_comparator.compare(key, &x.last_key);
-            if cmp_last.is_gt() {
+            if cmp_first.is_le() && cmp_last.is_ge() {
+                return Ordering::Equal
+            } else if cmp_first.is_lt() {
+                return Ordering::Less;
+            } else {
                 return Ordering::Greater;
             }
-
-            return Ordering::Equal;
         });
 
         if let Ok(index_sstable) = bsearch_res {
-            if let Some(entry) = self.run[index_sstable].find_entry(key) {
+            Some(self.run.get(index_sstable).unwrap().as_ref())
+        } else {
+            None
+        }
+    }
+
+    fn get_val_lx(&self, key: &Key, key_comparator: &dyn KeyComparator<Key>) -> Option<ValObj> {
+        if let Some(sstable) = self.get_sstable_of_sorted(key, key_comparator) {
+            if let Some(entry) = sstable.find_entry(key) {
                 return Some(entry.val_obj);
             }
         }
-
         None
     }
 
-    pub fn get_val(&self, key: &Key, key_comparator: Arc<dyn KeyComparator<Key>>) -> Option<ValObj> {
+    pub fn get_val(&self, key: &Key, key_comparator: &dyn KeyComparator<Key>) -> Option<ValObj> {
         if self.id == 0 {
             self.get_val_l0(key)
         } else {
@@ -189,5 +194,122 @@ impl Level {
             db_options.key_comparator.compare(&x.last_key, lowest_key).is_ge() &&
                 db_options.key_comparator.compare(&x.first_key, highest_key).is_le()
         }).cloned().collect()
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use std::cmp::Ordering;
+    use std::collections::VecDeque;
+    use std::mem::ManuallyDrop;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use memmap2::MmapOptions;
+    use proto::meta::TableIndex;
+    use crate::compact::level::Level;
+    use crate::comparator::BytesI32Comparator;
+    use crate::core::tests::{bytes_to_int, int_to_bytes};
+    use crate::db_options::DbOptions;
+    use crate::sstable::id_generator::SSTableIdGenerator;
+    use crate::sstable::SSTable;
+
+    fn create_sstable(first_key: i32, last_key: i32, id: usize) -> Arc<SSTable> {
+        let opts = Arc::new(DbOptions {
+            key_comparator: Arc::new(BytesI32Comparator {}),
+            ..Default::default()
+        });
+
+        Arc::new(SSTable {
+            index: TableIndex::default(),
+            mmap: ManuallyDrop::new(MmapOptions::new().map_anon().unwrap().make_read_only().unwrap()),
+            file_path: PathBuf::new(),
+            opts,
+            first_key: int_to_bytes(first_key),
+            last_key: int_to_bytes(last_key),
+            size_on_disk: 0,
+            delete_on_drop: AtomicBool::new(false),
+            id
+        })
+    }
+
+    #[test]
+    fn get_sstable_of_sorted() {
+        let id_generator = SSTableIdGenerator::new(0);
+        let key_comparator = BytesI32Comparator {};
+
+        let mut level = Level::new(0,
+                               &vec![
+                                   create_sstable(1, 3, id_generator.get_new()),
+                                   create_sstable(4, 8, id_generator.get_new()),
+                                   create_sstable(9, 14, id_generator.get_new()),
+                                   create_sstable(16, 18, id_generator.get_new()),
+                                   create_sstable(25, 30, id_generator.get_new()),
+                               ]);
+        
+        assert_eq!(level.run.get(0).unwrap().id, 1);
+        assert_eq!(level.run.get(1).unwrap().id, 2);
+
+        assert!(level.get_sstable_of_sorted(&int_to_bytes(0), &key_comparator).is_none());
+        assert!(level.get_sstable_of_sorted(&int_to_bytes(15), &key_comparator).is_none());
+        assert!(level.get_sstable_of_sorted(&int_to_bytes(20), &key_comparator).is_none());
+        assert!(level.get_sstable_of_sorted(&int_to_bytes(31), &key_comparator).is_none());
+
+
+        assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(1), &key_comparator).unwrap().id, 1);
+        assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(2), &key_comparator).unwrap().id, 1);
+        assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(3), &key_comparator).unwrap().id, 1);
+
+        assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(8), &key_comparator).unwrap().id, 2);
+        assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(5), &key_comparator).unwrap().id, 2);
+        assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(7), &key_comparator).unwrap().id, 2);
+        assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(4), &key_comparator).unwrap().id, 2);
+
+        assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(25), &key_comparator).unwrap().id, 5);
+        assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(30), &key_comparator).unwrap().id, 5);
+    }
+    fn bsearch_range(ranges: &VecDeque<(i32, i32)>, target: i32) -> Result<usize, usize> {
+        return ranges.binary_search_by(|x| {
+            let (first, last) = x;
+            
+            
+            let cmp_first = first.cmp(&target);
+            let cmp_last = last.cmp(&target);
+            
+            if cmp_first.is_le() && cmp_last.is_ge() {
+                return Ordering::Equal
+            } else if cmp_first.is_lt() {
+                return Ordering::Less;
+            } else {
+                return Ordering::Greater;
+            }
+        });
+    }
+    
+    #[test]
+    fn binary_search_range() {
+        let mut ranges = VecDeque::new();
+        ranges.push_back((1, 3));
+        ranges.push_back((4, 8));
+        ranges.push_back((9, 14));
+        ranges.push_back((16, 18));
+        ranges.push_back((25, 30));
+        
+        assert_eq!(bsearch_range(&ranges, 1), Ok(0));
+        assert_eq!(bsearch_range(&ranges, 2), Ok(0));
+        assert_eq!(bsearch_range(&ranges, 3), Ok(0));
+        
+        assert_eq!(bsearch_range(&ranges, 8), Ok(1));
+        assert_eq!(bsearch_range(&ranges, 5), Ok(1));
+        assert_eq!(bsearch_range(&ranges, 7), Ok(1));
+        assert_eq!(bsearch_range(&ranges, 4), Ok(1));
+        
+        assert_eq!(bsearch_range(&ranges, 25), Ok(4));
+        assert_eq!(bsearch_range(&ranges, 30), Ok(4));
+
+        assert!(bsearch_range(&ranges, 0).is_err());
+        assert!(bsearch_range(&ranges, 15).is_err());
+        assert!(bsearch_range(&ranges, 20).is_err());
+        assert!(bsearch_range(&ranges, 31).is_err());
     }
 }

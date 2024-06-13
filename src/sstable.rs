@@ -1,5 +1,3 @@
-pub mod id_generator;
-
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fs;
@@ -16,10 +14,12 @@ use prost::Message;
 
 use proto::meta::{BlockIndex, TableIndex};
 
+use crate::db_options::DbOptions;
 use crate::entry::Entry;
 use crate::errors::Result;
-use crate::db_options::DbOptions;
 use crate::util::no_fail;
+
+pub mod id_generator;
 
 /**
 Format on disk
@@ -275,22 +275,23 @@ pub(crate) mod tests {
 
     use bytes::Bytes;
     use memmap2::MmapOptions;
-    use tempfile::{tempdir, TempDir};
+    use tempfile::tempdir;
 
     use proto::meta::{BlockIndex, TableIndex};
 
     use crate::builder::Builder;
     use crate::comparator::BytesI32Comparator;
+    use crate::db_options::DbOptions;
     use crate::entry;
     use crate::entry::{Entry, ValObj};
     use crate::iterators::sstable_iterator::SSTableIterator;
     use crate::memtables::memtable::Memtable;
-    use crate::db_options::DbOptions;
     use crate::sstable::SSTable;
+    use crate::wal::Wal;
 
-    pub(crate) fn create_sstable<'a>(tmp_dir: &TempDir, opts: Arc<DbOptions>, entries: Vec<Entry>, id: usize) -> SSTable {
-        let sstable_path = tmp_dir.path().join(format!("{id:}.mem"));
-        let wal_path = tmp_dir.path().join(format!("{id:}.wal"));
+    pub(crate) fn create_sstable<'a>(opts: Arc<DbOptions>, entries: Vec<Entry>, id: usize) -> SSTable {
+        let sstable_path = opts.sstables_path().join(SSTable::create_path(id));
+        let wal_path = opts.wal_path().join(Wal::create_path(id));
         let memtable = Arc::new(Memtable::new(1, wal_path, opts.clone()).unwrap());
         for entry in entries {
             memtable.add(entry).unwrap();

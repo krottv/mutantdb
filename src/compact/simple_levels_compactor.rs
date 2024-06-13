@@ -167,8 +167,8 @@ pub mod tests {
 
     #[test]
     fn empty() {
-        let tmp_dir = tempdir().unwrap();
         let level_opts = SimpleLeveledOpts::default();
+        let tmp_dir = tempdir().unwrap();
         let db_opts = Arc::new(
             DbOptions {
                 path: tmp_dir.path().to_path_buf(),
@@ -211,14 +211,14 @@ pub mod tests {
         let e2 = new_entry(2, 2);
         let e3 = new_entry(3, 3);
 
-        let sstable1 = create_sstable(&tmp_dir, db_opts.clone(), vec![e1.clone(), e2.clone(), e3.clone()],
+        let sstable1 = create_sstable(db_opts.clone(), vec![e1.clone(), e2.clone(), e3.clone()],
                                       compactor.controller.id_generator.get_new());
 
         let e4 = new_entry(4, 4);
         let e5 = new_entry(2, 20);
         let e6 = new_entry(5, 5);
 
-        let sstable2 = create_sstable(&tmp_dir, db_opts.clone(), vec![e4.clone(), e5.clone(), e6.clone()],
+        let sstable2 = create_sstable(db_opts.clone(), vec![e4.clone(), e5.clone(), e6.clone()],
                                       compactor.controller.id_generator.get_new());
 
         compactor.add_to_l0(sstable1).unwrap();
@@ -308,14 +308,14 @@ pub mod tests {
         let e2 = new_entry(2, 2);
         let e3 = new_entry(3, 3);
 
-        let sstable1 = create_sstable(&tmp_dir, db_opts.clone(), vec![e1.clone(), e2.clone(), e3.clone()],
+        let sstable1 = create_sstable(db_opts.clone(), vec![e1.clone(), e2.clone(), e3.clone()],
                                       compactor.controller.id_generator.get_new());
 
         let e4 = new_entry(4, 4);
         let e5 = new_entry(2, 20);
         let e6 = new_entry(5, 5);
 
-        let sstable2 = create_sstable(&tmp_dir, db_opts.clone(), vec![e4.clone(), e5.clone(), e6.clone()],
+        let sstable2 = create_sstable(db_opts.clone(), vec![e4.clone(), e5.clone(), e6.clone()],
                                       compactor.controller.id_generator.get_new());
 
         compactor.add_to_l0(sstable1).unwrap();
@@ -367,19 +367,19 @@ pub mod tests {
         let e2 = new_entry(2, 2);
         let e3 = new_entry(3, 3);
         let vec_entries_1 = vec![e1.clone(), e2.clone(), e3.clone()];
-        let sstable1 = create_sstable(&tmp_dir, db_opts.clone(), vec_entries_1, id_generator.get_new());
+        let sstable1 = create_sstable(db_opts.clone(), vec_entries_1, id_generator.get_new());
 
         let e4 = new_entry(4, 4);
         let e5 = new_entry(2, 20);
         let e6 = new_entry(5, 5);
         let vec_entries_2 = vec![e4.clone(), e5.clone(), e6.clone()];
-        let sstable2 = create_sstable(&tmp_dir, db_opts.clone(), vec_entries_2, id_generator.get_new());
+        let sstable2 = create_sstable(db_opts.clone(), vec_entries_2, id_generator.get_new());
 
         let e7 = new_entry(1, 10);
         let e8 = new_entry(2, 30);
         let e9 = new_entry(5, 50);
         let vec_entries_3 = vec![e7.clone(), e8.clone(), e9.clone()];
-        let sstable3 = create_sstable(&tmp_dir, db_opts.clone(), vec_entries_3, id_generator.get_new());
+        let sstable3 = create_sstable(db_opts.clone(), vec_entries_3, id_generator.get_new());
         let size_on_disk_3 = sstable3.size_on_disk;
 
         let level_opts = SimpleLeveledOpts {

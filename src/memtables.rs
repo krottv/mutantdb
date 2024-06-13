@@ -9,6 +9,7 @@ use crate::entry::{Entry, ValObj};
 use crate::errors::Result;
 use crate::memtables::memtable::Memtable;
 use crate::db_options::DbOptions;
+use crate::wal::{Wal, WAL_FILE_EXT};
 
 pub mod memtable;
 
@@ -17,8 +18,6 @@ pub struct Memtables {
     pub immutables: VecDeque<Arc<Memtable>>,
     pub opts: Arc<DbOptions>
 }
-
-const WAL_FILE_EXT: &str = ".wal";
 
 impl Memtables {
     
@@ -57,7 +56,7 @@ impl Memtables {
             mutable = mutable_tmp;
         } else {
             mutable = Arc::new(Memtable::new(1, opts.wal_path()
-                .join(Self::id_to_name(1)), opts.clone())?);
+                .join(Wal::create_path(1)), opts.clone())?);
         }
         
         return Ok(
@@ -69,13 +68,9 @@ impl Memtables {
         )
     }
     
-    fn id_to_name(id: usize) -> String {
-        return format!("{}{}", id, WAL_FILE_EXT);
-    }
-    
-    fn next_path(&self) -> PathBuf {
+    fn next_wal_path(&self) -> PathBuf {
         let next_id = self.mutable.id + 1;
-        let next_path = Self::id_to_name(next_id);
+        let next_path = Wal::create_path(next_id);
         return self.opts.wal_path().join(next_path)
     }
 
@@ -114,7 +109,7 @@ impl Memtables {
         }
 
         let new_id = self.mutable.id + 1;
-        let new_memtable = Arc::new(Memtable::new(new_id, self.next_path(), self.opts.clone())?);
+        let new_memtable = Arc::new(Memtable::new(new_id, self.next_wal_path(), self.opts.clone())?);
 
         let old_memtable = std::mem::replace(&mut self.mutable, new_memtable);
         self.immutables.push_front(old_memtable);

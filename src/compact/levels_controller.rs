@@ -1,4 +1,3 @@
-use std::fmt::format;
 use std::sync::{Arc, Mutex, RwLock};
 use crate::builder::Builder;
 use crate::compact::level::Level;
@@ -8,7 +7,6 @@ use crate::db_options::DbOptions;
 use crate::sstable::id_generator::SSTableIdGenerator;
 use crate::sstable::SSTable;
 use crate::errors::Result;
-use crate::manifest;
 use crate::manifest::ManifestWriter;
 use crate::util::sync_dir;
 
@@ -40,10 +38,11 @@ impl LevelsController {
             if *level_id < levels.len() {
                 let sstable_path = db_opts.sstables_path().join(SSTable::create_path(*table_id as usize));
                 
-                if let Ok(sstable) = SSTable::open(sstable_path, db_opts.clone(), *table_id as usize) {
+                let open_res = SSTable::open(sstable_path, db_opts.clone(), *table_id as usize);
+                if let Ok(sstable) = open_res {
                     levels[*level_id].add(Arc::new(sstable));
                 } else {
-                    log::log!(log::Level::Warn, "can't restore sstable with id {}", *table_id);
+                    log::log!(log::Level::Warn, "can't restore sstable with id {}, err {}", *table_id, open_res.err().unwrap());
                 }
             }
         }
@@ -74,7 +73,7 @@ impl LevelsController {
     pub fn get(&self, key: &Key) -> Option<ValObj> {
         let levels = self.levels.read().unwrap();
         for level in levels.iter() {
-            let entry = level.get_val(key, self.db_opts.key_comparator.clone());
+            let entry = level.get_val(key, self.db_opts.key_comparator.as_ref());
             if entry.is_some() {
                 return entry;
             }

@@ -197,8 +197,10 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let opts = DbOptions {
             block_max_size: 1,
+            path: tmp_dir.into_path(),
             ..Default::default()
         };
+        opts.create_dirs().unwrap();
         let comparator = Arc::new(BytesStringUtf8Comparator {});
         let entry_comparator = Arc::new(EntryComparator::new(comparator));
 
@@ -207,7 +209,7 @@ mod tests {
         let e2 = new_entry(2, 2);
         let e4 = new_entry(4, 4);
 
-        let sstable = create_sstable(&tmp_dir, Arc::new(opts), vec![e4.clone(), e3.clone(), e2.clone(), e1.clone()], 1);
+        let sstable = create_sstable(Arc::new(opts), vec![e4.clone(), e3.clone(), e2.clone(), e1.clone()], 1);
         let iter = Box::new(SSTableIterator::new(Arc::new(sstable)));
         let mut merge_iter = MergeIterator::new(vec![iter], entry_comparator);
 
@@ -223,12 +225,14 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let opts = Arc::new(DbOptions {
             block_max_size: 1000,
+            path: tmp_dir.into_path(),
             ..Default::default()
         });
+        opts.create_dirs().unwrap();
         let comparator = Arc::new(BytesStringUtf8Comparator {});
         let entry_comparator = Arc::new(EntryComparator::new(comparator));
-        let sstable1 = create_sstable(&tmp_dir, opts.clone(),vec![], 1);
-        let sstable2 = create_sstable(&tmp_dir, opts.clone(),vec![], 2);
+        let sstable1 = create_sstable(opts.clone(),vec![], 1);
+        let sstable2 = create_sstable(opts.clone(),vec![], 2);
 
         let iter1 = Box::new(SSTableIterator::new(Arc::new(sstable1)));
         let iter2 = Box::new(SSTableIterator::new(Arc::new(sstable2)));
@@ -243,8 +247,10 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let opts = Arc::new(DbOptions {
             block_max_size: 1000,
+            path: tmp_dir.into_path(),
             ..Default::default()
         });
+        opts.create_dirs().unwrap();
         let comparator = Arc::new(BytesStringUtf8Comparator {});
         let entry_comparator = Arc::new(EntryComparator::new(comparator));
         
@@ -253,8 +259,8 @@ mod tests {
         let e3 = new_entry(3, 3);
         let e4 = new_entry(4, 4);
 
-        let sstable1 = Arc::new(create_sstable(&tmp_dir, opts.clone(), vec![e1.clone(), e3.clone()], 1));
-        let sstable2 = Arc::new(create_sstable(&tmp_dir, opts.clone(), vec![e2.clone(), e4.clone()], 2));
+        let sstable1 = Arc::new(create_sstable(opts.clone(), vec![e1.clone(), e3.clone()], 1));
+        let sstable2 = Arc::new(create_sstable(opts.clone(), vec![e2.clone(), e4.clone()], 2));
 
         let mut iter1 = Box::new(SSTableIterator::new(sstable1.clone()));
         let mut iter2 = Box::new(SSTableIterator::new(sstable2.clone()));
@@ -284,8 +290,11 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let opts = Arc::new(DbOptions {
             block_max_size: 1000,
+            path: tmp_dir.into_path(),
             ..Default::default()
         });
+        opts.create_dirs().unwrap();
+        
         let comparator = Arc::new(BytesStringUtf8Comparator {});
         let entry_comparator = Arc::new(EntryComparator::new(comparator));
         
@@ -294,8 +303,8 @@ mod tests {
         let e3 = Entry::new(Bytes::from("2key"), Bytes::from("value3"), META_ADD);
         let e4 = Entry::new(Bytes::from("3key"), Bytes::from("value4"), META_ADD);
 
-        let sstable1 = Arc::new(create_sstable(&tmp_dir, opts.clone(), vec![e1.clone(), e3.clone()], 1));
-        let sstable2 = Arc::new(create_sstable(&tmp_dir, opts.clone(), vec![e2.clone(), e4.clone()], 2));
+        let sstable1 = Arc::new(create_sstable(opts.clone(), vec![e1.clone(), e3.clone()], 1));
+        let sstable2 = Arc::new(create_sstable(opts.clone(), vec![e2.clone(), e4.clone()], 2));
 
         let iter1 = Box::new(SSTableIterator::new(sstable1));
         let iter2 = Box::new(SSTableIterator::new(sstable2));
@@ -314,16 +323,19 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let opts = Arc::new(DbOptions {
             block_max_size: 1000,
+            path: tmp_dir.into_path(),
             ..Default::default()
         });
+        opts.create_dirs().unwrap();
+        
         let comparator = Arc::new(BytesStringUtf8Comparator {});
         let entry_comparator = Arc::new(EntryComparator::new(comparator));
         
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), META_ADD);
         let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), META_ADD);
 
-        let sstable1 = Arc::new(create_sstable(&tmp_dir, opts.clone(),vec![e1.clone(), e2.clone()], 1));
-        let sstable2 = Arc::new(create_sstable(&tmp_dir, opts.clone(),vec![], 2));
+        let sstable1 = Arc::new(create_sstable(opts.clone(),vec![e1.clone(), e2.clone()], 1));
+        let sstable2 = Arc::new(create_sstable(opts.clone(),vec![], 2));
 
         let iter1 = Box::new(SSTableIterator::new(sstable1));
         let iter2 = Box::new(SSTableIterator::new(sstable2));

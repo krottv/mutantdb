@@ -19,8 +19,13 @@ simplelog = "0.12.2"
 ouroboros = "0.18.4"
 crc32fast = "1.4.2"
 #async
-threadpool = "1.8.1"
+# multi-receiver as opposed to single owner receiver in std
 crossbeam-channel = "0.5.13"
+# convenience methods like join_all
+futures = "0.3.30"
+# runtime for async
+tokio = { version = "1.37.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
+
 
 #doesn't support an outer comparator, only impl Ord, which is inconvenient to say at least.
 #crossbeam-skiplist = "0.1.3"

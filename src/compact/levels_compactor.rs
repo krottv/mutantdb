@@ -1,7 +1,8 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, RwLock};
 
-use threadpool::ThreadPool;
+use tokio::runtime::Runtime;
+use proto::meta::ManifestChange;
 
 use crate::compact::{Compactor, LeveledOpts};
 use crate::compact::level::Level;
@@ -11,6 +12,7 @@ use crate::db_options::DbOptions;
 use crate::entry::{Entry, EntryComparator};
 use crate::errors::Result;
 use crate::iterators::merge_iterator::MergeIterator;
+use crate::manifest::Manifest;
 use crate::sstable::id_generator::SSTableIdGenerator;
 use crate::sstable::SSTable;
 
@@ -29,10 +31,20 @@ impl LevelPriority {
             from_level_id + 1
         };
 
-        LevelPriority {
+        let priority = LevelPriority {
             score,
             from_level_id,
             to_level_id,
+        };
+
+        priority.validate();
+
+        priority
+    }
+
+    fn validate(&self) {
+        if self.to_level_id <= 0 || self.to_level_id <= self.from_level_id {
+            panic!("wrong ids are provided")
         }
     }
 }
@@ -40,97 +52,47 @@ impl LevelPriority {
 pub struct LevelsCompactor {
     level_opts: Arc<LeveledOpts>,
     controller: LevelsController,
-    pool: ThreadPool,
+    runtime: Runtime,
+}
+
+pub struct CompactDef {
+    priority: LevelPriority,
+    from_tables: Vec<Arc<SSTable>>,
+    to_tables: Vec<Arc<SSTable>>,
+}
+
+impl CompactDef {
+    fn is_async(&self) -> bool {
+        !self.to_tables.is_empty()
+    }
+}
+
+pub struct CompactRes {
+    changes: Vec<ManifestChange>,
 }
 
 impl LevelsCompactor {
     pub fn open(id_generator: Arc<SSTableIdGenerator>, level_opts: LeveledOpts, db_opts: Arc<DbOptions>) -> Result<Self> {
-        let mut levels = Vec::with_capacity(level_opts.num_levels);
-        for i in 0..level_opts.num_levels {
-            levels.push(Level::new_empty(i));
-        }
-
         let controller = LevelsController::open(
             db_opts.clone(),
             id_generator.clone(),
-            level_opts.num_levels
+            level_opts.num_levels,
         )?;
 
-        let pool = ThreadPool::new(level_opts.num_parallel_compact);
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .max_blocking_threads(level_opts.num_parallel_compact)
+            .build()
+            .unwrap();
+
         Ok(
             LevelsCompactor {
                 level_opts: Arc::new(level_opts),
                 controller,
-                pool,
+                runtime,
             }
         )
-    }
-
-    fn execute_priority(&self, priority: LevelPriority) -> Result<()> {
-        let (from_sstables, to_sstables) = self.select_tables_for_merge(priority.from_level_id, priority.to_level_id);
-
-        // check if nothing to merge with, then just move without processing
-        let just_move_from = to_sstables.is_empty();
-
-        if just_move_from {
-            let new_tables: Vec<Arc<SSTable>> = from_sstables.clone();
-
-            let keys_to_remove_to: HashSet<usize> = to_sstables.iter().map(|x| {
-                x.id
-            }).collect();
-
-            let keys_to_remove_from: HashSet<usize> = from_sstables.iter().map(|x| {
-                x.id
-            }).collect();
-
-            Self::change_levels(self.controller.levels.clone(), self.controller.db_opts.clone(),
-                                priority.from_level_id, priority.to_level_id,
-                                keys_to_remove_from, keys_to_remove_to, new_tables);
-        } else {
-            // building new tables
-
-            Self::spawn_execute_priority_task(&self.pool, priority, self.controller.levels.clone(),
-                                              self.controller.db_opts.clone(),
-                                              self.controller.id_generator.clone(),
-                                              from_sstables, to_sstables);
-        };
-
-        Ok(())
-    }
-
-    fn spawn_execute_priority_task(pool: &ThreadPool, priority: LevelPriority, levels_lock: Arc<RwLock<Vec<Level>>>,
-                                   db_opts: Arc<DbOptions>, id_generator: Arc<SSTableIdGenerator>,
-                                   from_sstables: Vec<Arc<SSTable>>, to_sstables: Vec<Arc<SSTable>>) {
-        pool.execute(move || {
-            let total_iter = Self::create_iterator_for_tables(db_opts.clone(),
-                                                              priority.from_level_id, priority.to_level_id, &from_sstables, &to_sstables);
-            let new_tables_res = LevelsController::create_sstables(db_opts.clone(), id_generator.clone(), total_iter);
-
-            if let Ok(new_tables) = new_tables_res {
-                let keys_to_remove_to: HashSet<usize> = to_sstables.iter().map(|x| {
-                    x.id
-                }).collect();
-
-                let keys_to_remove_from: HashSet<usize> = from_sstables.iter().map(|x| {
-                    x.id
-                }).collect();
-
-                Self::change_levels(levels_lock.clone(), db_opts.clone(),
-                                    priority.from_level_id, priority.to_level_id,
-                                    keys_to_remove_from, keys_to_remove_to, new_tables);
-
-                // delete old sstables
-                for sstable in from_sstables {
-                    sstable.mark_delete()
-                }
-
-                for sstable in to_sstables {
-                    sstable.mark_delete()
-                }
-            } else {
-                log::log!(log::Level::Warn, "compaction new tables generation error {}", new_tables_res.err().unwrap())
-            }
-        });
     }
 
     pub fn do_compact(&self) -> Result<bool> {
@@ -140,42 +102,121 @@ impl LevelsCompactor {
         let priorities = Self::compute_priorities(&self.level_opts, &targets, l0_run_len);
         let is_empty = priorities.is_empty();
 
-        for priority in priorities {
-            self.execute_priority(priority)?;
+        if is_empty {
+            return Ok(false)
         }
 
-        // only one compaction process at a time. Only different levels are parallelized.
-        self.pool.join();
+        let mut async_compacts = Vec::new();
+        let mut total_changes = Vec::new();
 
-        Ok(!is_empty)
+        for priority in priorities {
+            let (from_tables, to_tables) = self.select_tables_for_merge(&priority);
+            let compact_def = CompactDef {
+                priority,
+                from_tables,
+                to_tables,
+            };
+
+            if compact_def.is_async() {
+                async_compacts.push(compact_def)
+            } else {
+
+                for change in self.subcompact_move(compact_def).changes {
+                    total_changes.push(change)
+                }
+            }
+        }
+
+        for res in self.subcompact_async(async_compacts)?.into_iter() {
+            for change in res.changes {
+                total_changes.push(change)
+            }
+        }
+
+        self.controller.manifest_writer.lock()
+            .unwrap().write(total_changes)?;
+
+        self.controller.sync_dir()?;
+
+        Ok(true)
     }
 
+    fn subcompact_move(&self, compact_def: CompactDef) -> CompactRes {
+        let new_tables: Vec<Arc<SSTable>> = compact_def.from_tables.clone();
+
+        let changes = Self::change_levels_inner(self.controller.levels.clone(),
+                                                self.controller.db_opts.clone(), &compact_def, new_tables);
+
+        CompactRes {
+            changes,
+        }
+    }
+
+    fn subcompact_async(&self, compacts: Vec<CompactDef>) -> Result<Vec<CompactRes>> {
+
+        let mut futures = Vec::new();
+
+        for x in compacts.into_iter() {
+            futures.push(Self::subcompact_async_single(self.controller.levels.clone(),
+                                                       self.controller.db_opts.clone(), self.controller.id_generator.clone(), x))
+        }
+
+        let results = self.runtime.block_on(futures::future::join_all(futures.into_iter()));
+
+        let mut compacts = Vec::new();
+
+        for res in results.into_iter() {
+            compacts.push(res?);
+        }
+
+        Ok(
+            compacts
+        )
+    }
+
+
+    async fn subcompact_async_single(levels_lock: Arc<RwLock<Vec<Level>>>,
+                               db_opts: Arc<DbOptions>, id_generator: Arc<SSTableIdGenerator>,
+                               compact_def: CompactDef) -> Result<CompactRes> {
+        let total_iter = Self::create_iterator_for_tables(db_opts.clone(),
+                                                          &compact_def);
+        let new_tables = LevelsController::create_sstables(db_opts.clone(), id_generator.clone(), total_iter)?;
+
+        let changes = Self::change_levels_inner(levels_lock, db_opts, &compact_def, new_tables);
+
+        for sstable in &compact_def.from_tables {
+            sstable.mark_delete()
+        }
+
+        for sstable in &compact_def.to_tables {
+            sstable.mark_delete()
+        }
+
+        Ok(
+            CompactRes {
+                changes,
+            }
+        )
+    }
+
+
     fn create_iterator_for_tables(db_opts: Arc<DbOptions>,
-                                  from_level_id: usize,
-                                  to_level_id: usize,
-                                  from_sstables: &Vec<Arc<SSTable>>,
-                                  to_sstables: &Vec<Arc<SSTable>>) -> MergeIterator<Entry> {
+                                  compact_def: &CompactDef) -> MergeIterator<Entry> {
         let entry_comparator = Arc::new(EntryComparator::new(db_opts.key_comparator.clone()));
-        let from_iterator = Level::create_iterator_for_tables(entry_comparator.clone(), from_level_id, from_sstables);
-        let to_iterator = Level::create_iterator_for_tables(entry_comparator.clone(), to_level_id, to_sstables);
+        let from_iterator = Level::create_iterator_for_tables(entry_comparator.clone(), compact_def.priority.from_level_id, &compact_def.from_tables);
+        let to_iterator = Level::create_iterator_for_tables(entry_comparator.clone(), compact_def.priority.to_level_id, &compact_def.to_tables);
         let iterators: Vec<Box<dyn Iterator<Item=Entry>>> = vec![from_iterator, to_iterator];
         MergeIterator::new(iterators, entry_comparator)
     }
 
-    fn select_tables_for_merge(&self,
-                               from_level_id: usize,
-                               to_level_id: usize) -> (Vec<Arc<SSTable>>, Vec<Arc<SSTable>>) {
-        if to_level_id <= 0 || to_level_id <= from_level_id {
-            panic!("wrong ids are provided")
-        }
-
+    fn select_tables_for_merge(&self, priority: &LevelPriority) -> (Vec<Arc<SSTable>>, Vec<Arc<SSTable>>) {
         let levels = self.controller.levels.read().unwrap();
-        let from_level = &levels[from_level_id];
-        let to_level = &levels[to_level_id];
+        let from_level = &levels[priority.from_level_id];
+        let to_level = &levels[priority.to_level_id];
 
         let from_sstables: Vec<Arc<SSTable>>;
 
-        if from_level_id == 0 {
+        if priority.from_level_id == 0 {
             from_sstables = from_level.run.iter().cloned().collect();
         } else {
             from_sstables = vec![from_level.select_oldest_sstable().unwrap()]
@@ -197,37 +238,59 @@ impl LevelsCompactor {
         return (from_sstables, to_sstables);
     }
 
+    fn change_levels_inner(levels_lock: Arc<RwLock<Vec<Level>>>,
+                           db_opts: Arc<DbOptions>,
+                           compact_def: &CompactDef,
+                           new_sstables: Vec<Arc<SSTable>>,
+    ) -> Vec<ManifestChange> {
+        let keys_to_remove_to: HashSet<usize> = compact_def.to_tables.iter().map(|x| {
+            x.id
+        }).collect();
+
+        let keys_to_remove_from: HashSet<usize> = compact_def.from_tables.iter().map(|x| {
+            x.id
+        }).collect();
+
+        Self::change_levels(levels_lock, db_opts, &compact_def.priority,
+                            keys_to_remove_from, keys_to_remove_to, new_sstables)
+    }
+
     fn change_levels(levels_lock: Arc<RwLock<Vec<Level>>>,
                      db_opts: Arc<DbOptions>,
-                     from_level_id: usize,
-                     to_level_id: usize,
+                     priority: &LevelPriority,
                      keys_to_remove_from: HashSet<usize>,
                      keys_to_remove_to: HashSet<usize>,
                      new_sstables: Vec<Arc<SSTable>>,
-    ) {
-        if to_level_id <= 0 || to_level_id <= from_level_id {
-            panic!("wrong ids are provided")
-        }
-
+    ) -> Vec<ManifestChange> {
         // produce new levels
         // from level only delete
 
+        let mut changes = Vec::with_capacity(keys_to_remove_to.len() + keys_to_remove_from.len() +
+            new_sstables.len());
+
+        for table_id in &keys_to_remove_from {
+            changes.push(Manifest::new_change_delete(*table_id as u64));
+        }
+        for table_id in &keys_to_remove_to {
+            changes.push(Manifest::new_change_delete(*table_id as u64));
+        }
+
         let levels = levels_lock.read().unwrap();
 
-        let from_tables_complete: VecDeque<Arc<SSTable>> = (&levels[from_level_id].run)
+        let from_tables_complete: VecDeque<Arc<SSTable>> = (&levels[priority.from_level_id].run)
             .iter().filter(|x| {
             !keys_to_remove_from.contains(&x.id)
         }).cloned().collect();
 
         let mut new_level_from = Level {
             run: from_tables_complete,
-            id: from_level_id,
+            id: priority.from_level_id,
             size_on_disk: 0,
         };
         new_level_from.calc_size_on_disk();
 
         // to level delete, add new, sort
-        let mut to_tables_complete: VecDeque<Arc<SSTable>> = (&levels[to_level_id].run).iter()
+        let mut to_tables_complete: VecDeque<Arc<SSTable>> = (&levels[priority.to_level_id].run).iter()
             .filter(|x| {
                 !keys_to_remove_to.contains(&x.id)
             }).cloned().collect();
@@ -235,12 +298,13 @@ impl LevelsCompactor {
         drop(levels);
 
         for new_table in new_sstables {
+            changes.push(Manifest::new_change_add(new_table.id as u64, priority.to_level_id));
             to_tables_complete.push_back(new_table);
         }
 
         let mut new_level_to = Level {
             run: to_tables_complete,
-            id: to_level_id,
+            id: priority.to_level_id,
             size_on_disk: 0,
         };
         new_level_to.calc_size_on_disk();
@@ -248,8 +312,10 @@ impl LevelsCompactor {
 
         // write new levels
         let mut levels = levels_lock.write().unwrap();
-        levels[from_level_id] = new_level_from;
-        levels[to_level_id] = new_level_to;
+        levels[priority.from_level_id] = new_level_from;
+        levels[priority.to_level_id] = new_level_to;
+
+        changes
     }
 
     fn compute_targets(&self) -> Targets {
@@ -346,7 +412,8 @@ mod tests {
     use proto::meta::TableIndex;
 
     use crate::compact::{Compactor, LeveledOpts};
-    use crate::compact::levels_compactor::LevelsCompactor;
+    use crate::compact::levels_compactor::{LevelPriority, LevelsCompactor};
+    use crate::compact::levels_controller::LevelsController;
     use crate::compact::targets::Targets;
     use crate::comparator::BytesI32Comparator;
     use crate::core::tests::{bytes_to_int, int_to_bytes};
@@ -358,9 +425,14 @@ mod tests {
     #[test]
     fn empty() {
         let level_opts = LeveledOpts::default();
+        let tmp_dir = tempdir().unwrap();
         let db_opts = Arc::new(
-            DbOptions::default()
+            DbOptions {
+                path: tmp_dir.path().to_path_buf(),
+                ..Default::default()
+            }
         );
+        db_opts.create_dirs().unwrap();
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
         let compactor = LevelsCompactor::open(id_generator, level_opts, db_opts).unwrap();
 
@@ -472,12 +544,16 @@ mod tests {
             num_levels: 3,
             ..Default::default()
         };
-        let db_opts: Arc<DbOptions> = Arc::new(
+        let tmp_dir = tempdir().unwrap();
+        let db_opts = Arc::new(
             DbOptions {
+                path: tmp_dir.path().to_path_buf(),
                 key_comparator: Arc::new(BytesI32Comparator {}),
                 ..Default::default()
             }
         );
+        db_opts.create_dirs().unwrap();
+
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
         let compactor = LevelsCompactor::open(id_generator.clone(), level_opts, db_opts.clone()).unwrap();
 
@@ -496,7 +572,11 @@ mod tests {
             levels[2].add(Arc::new(empty_sstable(db_opts.clone(), id_generator.get_new(), 1, 2)));
         }
 
-        let (from_tables, to_tables) = compactor.select_tables_for_merge(1, 2);
+        let (from_tables, to_tables) = compactor.select_tables_for_merge(&LevelPriority {
+            score: 0f64,
+            from_level_id: 1,
+            to_level_id: 2,
+        });
         assert_eq!(tables_to_ranges(&from_tables), vec![(4, 7)]);
         assert_eq!(tables_to_ranges(&to_tables), vec![(3, 4), (5, 6), (7, 8)]);
     }
@@ -515,12 +595,17 @@ mod tests {
             num_levels: 2,
             ..Default::default()
         };
-        let db_opts: Arc<DbOptions> = Arc::new(
+        let tmp_dir = tempdir().unwrap();
+        let db_opts = Arc::new(
             DbOptions {
+                path: tmp_dir.path().to_path_buf(),
                 key_comparator: Arc::new(BytesI32Comparator {}),
                 ..Default::default()
             }
         );
+        db_opts.create_dirs().unwrap();
+
+
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
         let compactor = LevelsCompactor::open(id_generator.clone(), level_opts, db_opts.clone()).unwrap();
 
@@ -538,7 +623,11 @@ mod tests {
             levels[1].add(Arc::new(empty_sstable(db_opts.clone(), id_generator.get_new(), 1, 2)));
         }
 
-        let (from_tables, to_tables) = compactor.select_tables_for_merge(0, 1);
+        let (from_tables, to_tables) = compactor.select_tables_for_merge(&LevelPriority {
+            score: 0f64,
+            from_level_id: 0,
+            to_level_id: 1,
+        });
         assert_eq!(tables_to_ranges(&from_tables), vec![(4, 7), (1, 3)]);
         assert_eq!(tables_to_ranges(&to_tables), vec![(1, 2), (3, 4), (5, 6), (7, 8)]);
     }
@@ -559,12 +648,17 @@ mod tests {
             num_levels: 3,
             ..Default::default()
         };
-        let db_opts: Arc<DbOptions> = Arc::new(
+        let tmp_dir = tempdir().unwrap();
+        let db_opts = Arc::new(
             DbOptions {
+                path: tmp_dir.path().to_path_buf(),
                 key_comparator: Arc::new(BytesI32Comparator {}),
                 ..Default::default()
             }
         );
+        db_opts.create_dirs().unwrap();
+
+
         let id_generator = Arc::new(SSTableIdGenerator::new(0));
         let compactor = LevelsCompactor::open(id_generator.clone(), level_opts, db_opts.clone()).unwrap();
 
@@ -585,7 +679,11 @@ mod tests {
         let new_tables = vec![Arc::new(empty_sstable(db_opts.clone(),
                                                      id_generator.get_new(), 3, 8))];
 
-        LevelsCompactor::change_levels(compactor.controller.levels.clone(), db_opts.clone(), 1, 2, HashSet::from([1]),
+        LevelsCompactor::change_levels(compactor.controller.levels.clone(), db_opts.clone(), &LevelPriority {
+            score: 0f64,
+            from_level_id: 1,
+            to_level_id: 2,
+        }, HashSet::from([1]),
                                        HashSet::from([6, 7, 8]),
                                        new_tables);
 
@@ -615,6 +713,8 @@ mod tests {
                 ..Default::default()
             }
         );
+        db_opts.create_dirs().unwrap();
+
         let level_opts = LeveledOpts {
             base_level_size: 1,
             num_levels: 5,
@@ -629,14 +729,14 @@ mod tests {
         let e2 = crate::compact::simple_levels_compactor::tests::new_entry(2, 2);
         let e3 = crate::compact::simple_levels_compactor::tests::new_entry(3, 3);
 
-        let sstable1 = create_sstable(&tmp_dir, db_opts.clone(), vec![e1.clone(), e2.clone(), e3.clone()],
+        let sstable1 = create_sstable(db_opts.clone(), vec![e1.clone(), e2.clone(), e3.clone()],
                                       compactor.controller.id_generator.get_new());
 
         let e4 = crate::compact::simple_levels_compactor::tests::new_entry(4, 4);
         let e5 = crate::compact::simple_levels_compactor::tests::new_entry(2, 20);
         let e6 = crate::compact::simple_levels_compactor::tests::new_entry(5, 5);
 
-        let sstable2 = create_sstable(&tmp_dir, db_opts.clone(), vec![e4.clone(), e5.clone(), e6.clone()],
+        let sstable2 = create_sstable(db_opts.clone(), vec![e4.clone(), e5.clone(), e6.clone()],
                                       compactor.controller.id_generator.get_new());
 
         println!("{}", compactor.compute_targets());
@@ -695,6 +795,8 @@ mod tests {
                 ..Default::default()
             }
         );
+        db_opts.create_dirs().unwrap();
+
         let level_opts = LeveledOpts {
             base_level_size: 1,
             num_levels: 5,
@@ -703,30 +805,30 @@ mod tests {
             ..Default::default()
         };
         let id_generator = Arc::new(SSTableIdGenerator::new(1));
-        let compactor = LevelsCompactor::open(id_generator, level_opts, db_opts.clone()).unwrap();
+        let mut compactor = LevelsCompactor::open(id_generator.clone(), level_opts.clone(), db_opts.clone()).unwrap();
 
         let e1 = crate::compact::simple_levels_compactor::tests::new_entry(1, 1);
         let e2 = crate::compact::simple_levels_compactor::tests::new_entry(2, 2);
         let e3 = crate::compact::simple_levels_compactor::tests::new_entry(3, 3);
 
-        let sstable1 = create_sstable(&tmp_dir, db_opts.clone(), vec![e1.clone(), e2.clone(), e3.clone()],
+        let sstable1 = create_sstable(db_opts.clone(), vec![e1.clone(), e2.clone(), e3.clone()],
                                       compactor.controller.id_generator.get_new());
 
         let e4 = crate::compact::simple_levels_compactor::tests::new_entry(4, 4);
         let e5 = crate::compact::simple_levels_compactor::tests::new_entry(5, 5);
         let e6 = crate::compact::simple_levels_compactor::tests::new_entry(6, 6);
 
-        let sstable2 = create_sstable(&tmp_dir, db_opts.clone(), vec![e4.clone(), e5.clone(), e6.clone()],
+        let sstable2 = create_sstable(db_opts.clone(), vec![e4.clone(), e5.clone(), e6.clone()],
                                       compactor.controller.id_generator.get_new());
 
         println!("{}", compactor.compute_targets());
 
         compactor.add_to_l0(sstable1).unwrap();
-        compactor.controller.log_levels();
+        log_levels(&compactor.controller);
         println!("{}", compactor.compute_targets());
 
         compactor.add_to_l0(sstable2).unwrap();
-        compactor.controller.log_levels();
+        log_levels(&compactor.controller);
         println!("{}", compactor.compute_targets());
 
         // should be moved and merged to last level
@@ -742,12 +844,13 @@ mod tests {
         drop(levels);
 
         // add to 4 level
-        let sstable3 = create_sstable(&tmp_dir, db_opts.clone(),
-                                      vec![crate::compact::simple_levels_compactor::tests::new_entry(8, 8)],
+        let e7 = crate::compact::simple_levels_compactor::tests::new_entry(8, 8);
+        let sstable3 = create_sstable(db_opts.clone(),
+                                      vec![e7.clone()],
                                       compactor.controller.id_generator.get_new());
 
         compactor.add_to_l0(sstable3).unwrap();
-        compactor.controller.log_levels();
+        log_levels(&compactor.controller);
         println!("{}", compactor.compute_targets());
 
         let levels = compactor.controller.levels.read().unwrap();
@@ -759,5 +862,34 @@ mod tests {
         assert_eq!(levels[3].run.len(), 1);
         // 2 tables are non-overlapping and thus not merged
         assert_eq!(levels[4].run.len(), 2);
+        
+        drop(levels);
+        drop(compactor);
+
+        // reopen.
+        compactor = LevelsCompactor::open(id_generator, level_opts, db_opts.clone()).unwrap();
+
+        assert_eq!(compactor.controller.get(&e1.key), Some(e1.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e3.key), Some(e3.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e4.key), Some(e4.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e5.key), Some(e5.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e6.key), Some(e6.val_obj.clone()));
+        assert_eq!(compactor.controller.get(&e7.key), Some(e7.val_obj.clone()));
+    }
+
+    fn log_levels(controller: &LevelsController) {
+        let mut s = String::new();
+        s.push_str("Levels visualized\n");
+
+        for level in controller.levels.read().unwrap().iter() {
+            let tables_str = level.run.iter().map(|x| {
+                format!("(range {}-{}, id {})", bytes_to_int(&x.first_key), bytes_to_int(&x.last_key), &x.id)
+            }).collect::<Vec<String>>().join(", ");
+
+            let level_str = format!("level id:{}, size:{}mb. tables [{}]\n", level.id, level.size_on_disk / 1024, tables_str);
+            s.push_str(level_str.as_str());
+        }
+
+        log::log!(target: "compaction", log::Level::Info, "{}" ,s);
     }
 }

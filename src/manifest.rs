@@ -4,7 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 use prost::Message;
 
 use proto::meta::{ManifestChange, ManifestChangeSet, ManifestOperation};

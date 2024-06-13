@@ -160,7 +160,13 @@ impl Wal {
         
         Ok(())
     }
+    
+    pub fn create_path(id: usize) -> String {
+        return format!("{}{}", id, WAL_FILE_EXT);
+    }
 }
+
+pub const WAL_FILE_EXT: &str = ".wal";
 
 impl Drop for Wal {
     fn drop(&mut self) {
