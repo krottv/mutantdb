@@ -2,6 +2,8 @@ use std::collections::hash_map::{DefaultHasher, RandomState};
 use std::hash::{BuildHasher, Hasher};
 use rand::random;
 
+#[allow(dead_code)]
+
 pub trait CoinFlipper: Send + Sync {
     fn flip(&self) -> bool;
 }

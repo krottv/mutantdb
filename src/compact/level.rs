@@ -35,11 +35,6 @@ impl Level {
         }
     }
 
-    pub fn set_new_run(&mut self, run: VecDeque<Arc<SSTable>>) {
-        self.run = run;
-        self.calc_size_on_disk();
-    }
-
     pub fn calc_size_on_disk(&mut self) {
         let mut size_on_disk = 0u64;
         for sstable in &self.run {
@@ -205,11 +200,14 @@ pub mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+
     use memmap2::MmapOptions;
+
     use proto::meta::TableIndex;
+
     use crate::compact::level::Level;
     use crate::comparator::BytesI32Comparator;
-    use crate::core::tests::{bytes_to_int, int_to_bytes};
+    use crate::core::tests::int_to_bytes;
     use crate::db_options::DbOptions;
     use crate::sstable::id_generator::SSTableIdGenerator;
     use crate::sstable::SSTable;
@@ -238,7 +236,7 @@ pub mod tests {
         let id_generator = SSTableIdGenerator::new(0);
         let key_comparator = BytesI32Comparator {};
 
-        let mut level = Level::new(0,
+        let level = Level::new(0,
                                &vec![
                                    create_sstable(1, 3, id_generator.get_new()),
                                    create_sstable(4, 8, id_generator.get_new()),

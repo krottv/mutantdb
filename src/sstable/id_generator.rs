@@ -17,4 +17,8 @@ impl SSTableIdGenerator {
         let prev = self.last_id.fetch_add(1, Ordering::Relaxed);
         return prev + 1;
     }
+    
+    pub fn set_new(&self, val: usize) {
+        self.last_id.store(val, Ordering::Relaxed);
+    }
 }

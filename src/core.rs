@@ -16,7 +16,7 @@ use crate::db_options::{DbOptions};
 use crate::sstable::id_generator::SSTableIdGenerator;
 use crate::sstable::SSTable;
 
-pub struct Core {
+pub struct Mutant {
     inner: Arc<InnerCore>,
     sx: Option<Sender<()>>,
     closer: Closer
@@ -29,13 +29,12 @@ pub struct InnerCore {
     id_generator: Arc<SSTableIdGenerator>,
 }
 
-impl Core {
-    pub fn new(db_opts: Arc<DbOptions>) -> Result<Self> {
+impl Mutant {
+    pub fn open(db_opts: Arc<DbOptions>) -> Result<Self> {
         db_opts.create_dirs()?;
         
         let memtables = RwLock::new(Memtables::open(db_opts.clone())?);
-        // todo: set right id after restoring the manifest.
-        let id_generator = Arc::new(SSTableIdGenerator::new(1));
+        let id_generator = Arc::new(SSTableIdGenerator::new(0));
 
         let compactor = open_compactor(id_generator.clone(), db_opts.clone())?;
 
@@ -47,7 +46,7 @@ impl Core {
         };
 
         Ok(
-            Core {
+            Mutant {
                 inner: Arc::new(inner),
                 sx: None,
                 closer: Closer::new()
@@ -102,21 +101,20 @@ impl Core {
     }
 
     fn add_inner(&self, key: Key, val_obj: ValObj) -> Result<()> {
-        let mut memtables = self.inner.memtables.read().unwrap();
+        //todo: locks the whole memtables for check and freeze_last, which is not good
+        // lock-free skiplist wouldn't bring any benefits in such case.
+        let mut memtables = self.inner.memtables.write().unwrap();
         if memtables.is_need_to_freeze(Entry::get_encoded_size(&key, &val_obj)) {
-            drop(memtables);
 
             {
-                self.inner.memtables.write().unwrap()
-                    .freeze_last()?;
+                memtables.freeze_last()?;
 
                 self.notify_memtable_freeze();
             }
-
-            memtables = self.inner.memtables.read().unwrap();
         }
+        drop(memtables);
 
-        memtables.add(Entry {
+        self.inner.memtables.read().unwrap().add(Entry {
             key,
             val_obj,
         })
@@ -145,13 +143,13 @@ impl Core {
     }
 }
 
-impl Drop for Core {
+impl Drop for Mutant {
     fn drop(&mut self) {
         self.closer.close();
     }
 }
 
-impl IntoIterator for &Core {
+impl IntoIterator for &Mutant {
     type Item = Entry;
     type IntoIter = MergeIterator<Entry>;
 
@@ -215,7 +213,7 @@ pub mod tests {
     use tempfile::tempdir;
     use crate::compact::{CompactionOptions, SimpleLeveledOpts};
     use crate::comparator::BytesI32Comparator;
-    use crate::core::Core;
+    use crate::core::Mutant;
     use crate::db_options::{DbOptions};
 
     pub fn int_to_bytes(v: i32) -> Bytes {
@@ -249,7 +247,7 @@ pub mod tests {
         std::fs::create_dir_all(&db_opts.wal_path()).unwrap();
         std::fs::create_dir_all(&db_opts.sstables_path()).unwrap();
 
-        let mut core = Core::new(db_opts).unwrap();
+        let mut core = Mutant::open(db_opts).unwrap();
         let _handle = core.start_compact_job();
 
         for i in 1..100 {
@@ -295,7 +293,7 @@ pub mod tests {
         std::fs::create_dir_all(&db_opts.wal_path()).unwrap();
         std::fs::create_dir_all(&db_opts.sstables_path()).unwrap();
 
-        let core = Core::new(db_opts).unwrap();
+        let core = Mutant::open(db_opts).unwrap();
 
         for i in 1..100 {
             core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
@@ -363,7 +361,7 @@ pub mod tests {
         std::fs::create_dir_all(&db_opts.wal_path()).unwrap();
         std::fs::create_dir_all(&db_opts.sstables_path()).unwrap();
 
-        let core = Core::new(db_opts).unwrap();
+        let core = Mutant::open(db_opts).unwrap();
 
         for i in 1..100 {
             core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();

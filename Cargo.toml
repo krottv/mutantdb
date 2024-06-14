@@ -32,3 +32,30 @@ tokio = { version = "1.37.0", features = ["rt", "rt-multi-thread", "macros", "ti
 
 #piece of shit with generics
 #binary-heap-plus = "0.5.0"
+
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+# The [workspace] section in a Rust Cargo.toml file is used to define a workspace,
+# which is a set of packages (crates) that are developed and built together.
+
+[workspace]
+members = [
+    #"mutant_bench",
+    "proto",
+]
+
+[[bench]]
+name = "bench_mutant"
+harness = false
+
+[profile.bench]
+opt-level = 3
+debug = false
+codegen-units = 1
+lto = 'thin'
+incremental = false
+debug-assertions = false
+overflow-checks = false
+rpath = false

@@ -10,6 +10,8 @@ use crate::errors::Result;
 use crate::manifest::ManifestWriter;
 use crate::util::sync_dir;
 
+#[allow(dead_code)]
+
 pub struct LevelsController {
     pub id_generator: Arc<SSTableIdGenerator>,
     pub db_opts: Arc<DbOptions>,
@@ -34,6 +36,7 @@ impl LevelsController {
         }
         
         // todo: parallelize opening
+        let mut max_table_id = 0u64;
         for (table_id, level_id) in &manifest.tables {
             if *level_id < levels.len() {
                 let sstable_path = db_opts.sstables_path().join(SSTable::create_path(*table_id as usize));
@@ -45,12 +48,17 @@ impl LevelsController {
                     log::log!(log::Level::Warn, "can't restore sstable with id {}, err {}", *table_id, open_res.err().unwrap());
                 }
             }
+            if *table_id > max_table_id {
+                max_table_id = *table_id;
+            }
         }
         
         for level in &mut levels {
             level.sort_tables(db_opts.key_comparator.as_ref());
             level.validate(db_opts.key_comparator.as_ref());
         }
+        
+        id_generator.set_new(max_table_id as usize);
         
         Ok(
             LevelsController {
