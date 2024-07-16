@@ -133,6 +133,14 @@ mod tests {
         assert!(!list.contains(&1));
         assert!(!list.contains(&2));
         assert!(!list.contains(&3));
+
+        list.add(1, 0);
+        list.add(2, 0);
+        list.add(3, 0);
+        assert!(!list.contains(&0));
+        assert!(list.contains(&2));
+        assert!(list.erase(&2));
+        assert!(!list.contains(&2));
     }
 
     #[test]
