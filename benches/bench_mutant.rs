@@ -1,11 +1,14 @@
 use std::ops::Add;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use criterion::{criterion_group, criterion_main, Criterion};
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use tempfile::TempDir;
+
 use mutantdb::core::Mutant;
 use mutantdb::db_options::DbOptions;
-use crate::common::{rand_add, rand_read, remove_files};
+
+use crate::common::{rand_add, rand_read};
 
 mod common;
 
@@ -63,35 +66,33 @@ fn bench_mutant(c: &mut Criterion) {
         });
     });
     
-    // todo: fix seg err
-    // c.bench_function("mutant randomly populate small value", |b| {
-    //     b.iter_custom(|iters| {
-    //         let mut total = Duration::new(0, 0);
-    // 
-    //         (0..iters).for_each(|_| {
-    //             let (tmp_dir, opts) = get_opts();
-    // 
-    //             last_tmp_dir = tmp_dir;
-    //             last_opts = opts.clone();
-    //             
-    //             let mutant = Arc::new(Mutant::open(opts).unwrap());
-    //             
-    // 
-    //             let now = Instant::now();
-    //             rand_add(
-    //                 mutant,
-    //                 KEY_NUMS,
-    //                 CHUNK_SIZE,
-    //                 BATCH_SIZE,
-    //                 SMALL_VALUE_SIZE,
-    //                 false,
-    //             );
-    //             total = total.add(now.elapsed());
-    //         });
-    // 
-    //         total
-    //     });
-    // });
+    c.bench_function("mutant randomly populate small value", |b| {
+        b.iter_custom(|iters| {
+            let mut total = Duration::new(0, 0);
+
+            (0..iters).for_each(|_| {
+                let (tmp_dir, opts) = get_opts();
+
+                last_tmp_dir = tmp_dir;
+                last_opts = opts.clone();
+
+                let mutant = Arc::new(Mutant::open(opts).unwrap());
+
+                let now = Instant::now();
+                rand_add(
+                    mutant,
+                    KEY_NUMS,
+                    CHUNK_SIZE,
+                    BATCH_SIZE,
+                    SMALL_VALUE_SIZE,
+                    false,
+                );
+                total = total.add(now.elapsed());
+            });
+
+            total
+        });
+    });
 
     c.bench_function("mutant randread small value", |b| {
 
@@ -135,32 +136,31 @@ fn bench_mutant(c: &mut Criterion) {
         });
     });
     
-    // todo: fix seg err 
-    // c.bench_function("mutant randomly populate large value", |b| {
-    //     b.iter_custom(|iters| {
-    //         let mut total = Duration::new(0, 0);
-    // 
-    //         (0..iters).for_each(|_| {
-    //             let (tmp_dir, opts) = get_opts();
-    //             last_tmp_dir = tmp_dir;
-    //             last_opts = opts.clone();
-    //             let mutant = Arc::new(Mutant::open(opts).unwrap());
-    // 
-    //             let now = Instant::now();
-    //             rand_add(
-    //                 mutant,
-    //                 KEY_NUMS,
-    //                 CHUNK_SIZE,
-    //                 BATCH_SIZE,
-    //                 LARGE_VALUE_SIZE,
-    //                 false,
-    //             );
-    //             total = total.add(now.elapsed());
-    //         });
-    // 
-    //         total
-    //     });
-    // });
+    c.bench_function("mutant randomly populate large value", |b| {
+        b.iter_custom(|iters| {
+            let mut total = Duration::new(0, 0);
+    
+            (0..iters).for_each(|_| {
+                let (tmp_dir, opts) = get_opts();
+                last_tmp_dir = tmp_dir;
+                last_opts = opts.clone();
+                let mutant = Arc::new(Mutant::open(opts).unwrap());
+    
+                let now = Instant::now();
+                rand_add(
+                    mutant,
+                    KEY_NUMS,
+                    CHUNK_SIZE,
+                    BATCH_SIZE,
+                    LARGE_VALUE_SIZE,
+                    false,
+                );
+                total = total.add(now.elapsed());
+            });
+    
+            total
+        });
+    });
 
 
     c.bench_function("mutant randread large value", |b| {
@@ -180,9 +180,9 @@ fn bench_mutant(c: &mut Criterion) {
 
 
 criterion_group! {
-  name = benches_agate_rocks;
+  name = benches_db_basic;
   config = Criterion::default();
   targets = bench_mutant
 }
 
-criterion_main!(benches_agate_rocks);
+criterion_main!(benches_db_basic);

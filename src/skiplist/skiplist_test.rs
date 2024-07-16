@@ -93,29 +93,31 @@ mod tests {
         
         assert_eq!(list.size, 4);
         
-        match list.add(3, 100) {
-            AddResult::Added => {
-                panic!("wrong operation")
+        for _ in 0..20 {
+            match list.add(3, 100) {
+                AddResult::Added => {
+                    panic!("wrong operation")
+                }
+                AddResult::Replaced(_) => {}
             }
-            AddResult::Replaced(_) => {}
-        }
-        assert_eq!(list.size, 4);
+            assert_eq!(list.size, 4);
 
-        match list.add(1, 100) {
-            AddResult::Added => {
-                panic!("wrong operation")
+            match list.add(1, 100) {
+                AddResult::Added => {
+                    panic!("wrong operation")
+                }
+                AddResult::Replaced(_) => {}
             }
-            AddResult::Replaced(_) => {}
-        }
-        assert_eq!(list.size, 4);
-        
-        match list.add(4, 100) {
-            AddResult::Added => {
-                panic!("wrong operation")
+            assert_eq!(list.size, 4);
+
+            match list.add(4, 100) {
+                AddResult::Added => {
+                    panic!("wrong operation")
+                }
+                AddResult::Replaced(_) => {}
             }
-            AddResult::Replaced(_) => {}
+            assert_eq!(list.size, 4);
         }
-        assert_eq!(list.size, 4);
     }
     
     #[test]

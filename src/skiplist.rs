@@ -156,6 +156,9 @@ impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
         unsafe {
             let data_pointer = Box::into_raw(Box::new(SkipEntry { key, value }));
             let mut cur = self.search_prev(&(*data_pointer).key);
+            if cur.is_null() {
+                panic!("cur cannot be null. Is head null (cannot be) {}", self.head.is_null())
+            }
 
             if !self.allow_duplicates {
                 erased = self.may_erase_if_next_eq(&(*data_pointer).key, cur);
@@ -173,8 +176,15 @@ impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
                     // only one level at a time
                     break;
                 } else {
+                    // find top node to attach to.
                     while (*cur).above.is_null() {
                         cur = (*cur).prev;
+                        if cur.is_null() {
+                            
+                            println!("{}", self.to_string_by_level());
+                            panic!("previous node is null which is illegal because we should get at least head. The head should have all levels.\
+                             Current level is {}, total height {}, head is null? {}", h, self.height, self.head.is_null())
+                        }
                     }
                     cur = (*cur).above;
 
@@ -218,9 +228,19 @@ impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
             }
         }
     }
+    
+    fn node_height(node: NodePtr<KEY, VALUE>) -> usize {
+        unsafe {
+            let mut head = node;
+            let mut res = 0;
+            while !head.is_null() {
+                res += 1;
+                head = (*head).below;
+            }
+            return res;
+        }
+    }
 
-    //todo: a level with nothing except dummy node can be
-    // produced, which doesn't serve any purpose.
     fn create_new_level(&mut self) {
         self.check_state();
 
@@ -233,6 +253,7 @@ impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
             (*self.head).above = cur_above;
             let mut cur_below = (*self.head).next;
             self.head = cur_above;
+            let mut nodes_created = 0usize;
 
             while !cur_below.is_null() {
                 if self.flip_coin() {
@@ -245,9 +266,21 @@ impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
                     (*cur_below).above = new_node;
 
                     cur_above = new_node;
+                    
+                    nodes_created += 1;
                 }
 
                 cur_below = (*cur_below).next
+            }
+
+            // a level with nothing except dummy node can be
+            // produced, which doesn't serve any purpose.
+            if nodes_created == 0 {
+                let old_head = self.head;
+                self.head = (*old_head).below;
+                (*self.head).above = null_mut();
+                Self::remove(old_head);
+                self.height -= 1;
             }
         }
         self.check_state();
@@ -282,14 +315,16 @@ impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
     }
 
     pub fn erase_node(&mut self, node: NodePtr<KEY, VALUE>) -> Box<SkipEntry<KEY, VALUE>> {
+        self.check_state();
+        
         self.size -= 1;
 
-        let mut to_delete = node;
+        let mut next_delete = node;
 
         let removed_value: Box<SkipEntry<KEY, VALUE>>;
 
         unsafe {
-            match &mut (*to_delete).data {
+            match &mut (*next_delete).data {
                 SkipData::Dummy() => { panic!("node that is deleted should contain owned value") }
                 SkipData::Owned(owned, _) => {
                     removed_value = std::mem::replace(owned, Box::new(SkipEntry::default()));
@@ -297,22 +332,26 @@ impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
                 SkipData::Pointer(_) => { panic!("node that is deleted should contain owned value") }
             }
 
-
             let mut level_removed = false;
             let mut cur_level = 0;
 
-            while !to_delete.is_null() {
-                let tmp = to_delete;
-                to_delete = (*to_delete).above;
+            // if a level (only if > 1) can contain nothing except dummy node
+            // then it will panic, because this dummy node won't be erased
+            // in the current code.
+            while !next_delete.is_null() {
+                let cur_delete = next_delete;
+                next_delete = (*next_delete).above;
 
 
-                // erase the whole level. Except if it is the first level (first level can't be removed)
-                if cur_level > 0 && (*tmp).next.is_null() && (*(*tmp).prev).data.is_none() && self.height > 1 {
+                // Erase all levels including cur_delete.level and all consequent
+                // Except if it is the first level (first level can't be removed)
+                if cur_level > 0 && (*cur_delete).next.is_null() &&
+                    (*(*cur_delete).prev).data.is_none() && self.height > 1 {
                     self.height -= 1;
 
-                    // first removal of the whole level
+                    // removing head link to all unnecessary levels.
                     if !level_removed {
-                        self.head = (*(*tmp).prev).below;
+                        self.head = (*(*cur_delete).prev).below;
 
                         (*self.head).above = null_mut();
 
@@ -321,17 +360,28 @@ impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
                         }
                     }
 
-                    Self::remove((*tmp).prev);
+                    // remove old dummy node
+                    Self::remove((*cur_delete).prev);
 
                     level_removed = true;
                 } else if level_removed {
-                    panic!("should enter level removed clause")
+                    panic!("this and all upper levels also should be removed if previous was")
                 }
 
-                Self::remove(tmp);
+                Self::remove(cur_delete);
                 cur_level += 1;
             }
 
+            self.check_state();
+
+            #[cfg(debug_assertions)]
+            {
+                let actual_height = Self::node_height(self.head);
+                if actual_height != self.height {
+                    panic!("error in height calculation. expected {}, actual {}", self.height, actual_height);
+                }
+            }
+            
             return removed_value;
         }
     }
@@ -375,6 +425,41 @@ impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
             (*self.head).nullify_pointers();
             (*self.head_bottom).nullify_pointers();
         }
+    }
+
+    pub fn to_string_by_level(&self) -> String {
+        let mut result = String::new();
+
+        unsafe {
+            let mut current_level = self.height - 1;
+            while current_level < self.height {
+                result.push_str(&format!("Level {}:\n", current_level));
+
+                let mut node = self.head;
+                for _ in 0..current_level {
+                    node = (*node).below;
+                }
+
+                while !node.is_null() {
+                    match &(*node).data {
+                        SkipData::Dummy() => result.push_str(&format!("HEAD({:p}) -> ", node)),
+                        SkipData::Owned(_, pointer) | SkipData::Pointer(pointer) => {
+                            result.push_str(&format!("({:p}) -> ", pointer as *const _));
+                        }
+                    }
+                    node = (*node).next;
+                }
+
+                result.push_str("NULL\n");
+                if current_level > 0 {
+                    current_level -= 1;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        result
     }
 }
 
