@@ -58,6 +58,7 @@ impl SimpleLevelsCompactor {
         }
         
         let new_level = Level::new(level_id + 1, &new_tables);
+        new_level.validate(self.controller.db_opts.key_comparator.as_ref());
 
         // delete old sstables
         for sstable in level1.run.iter() {

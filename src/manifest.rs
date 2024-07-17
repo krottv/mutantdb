@@ -149,7 +149,6 @@ Manifest compression should be atomic.
 We write to a different file and then replace current.
 */
 
-// todo: fsync on directory when done writing level info.
 pub struct ManifestWriter {
     db_opts: Arc<DbOptions>,
     file: File,

@@ -47,9 +47,8 @@ impl Level {
 
     pub fn sort_tables(&mut self, key_comparator: &dyn KeyComparator<Bytes>) {
         if self.id == 0 {
-            // todo: test sort order
             self.run.make_contiguous().sort_unstable_by(|x, y| {
-                y.id.cmp(&x.id)
+                x.id.cmp(&y.id)
             });
         } else {
             self.run.make_contiguous().sort_unstable_by(|x, y| {
@@ -69,7 +68,7 @@ impl Level {
                 if index != 0 && table.index.key_count > 1 && key_comparator.compare(&table.first_key, prev_right).is_le() {
                     
                     let tables_str: Vec<String> = self.run.iter().map(|x| {
-                        format!("first_key:{} last_key{}", String::from_utf8(x.first_key.to_vec()).unwrap(),
+                        format!("first_key:{} last_key:{}", String::from_utf8(x.first_key.to_vec()).unwrap(),
                                 String::from_utf8(x.last_key.to_vec()).unwrap())
                     }).collect();
                     
@@ -128,7 +127,7 @@ impl Level {
         if level_id == 0 {
             Box::new(Self::create_iterator_l0(entry_comparator, tables))
         } else {
-            Box::new(Self::create_iterator_lx(entry_comparator, tables))
+            Box::new(Self::create_iterator_lx(tables))
         }
     }
 
@@ -143,35 +142,12 @@ impl Level {
         return MergeIterator::new(iterators, entry_comparator);
     }
 
-    fn create_iterator_lx(entry_comparator: Arc<dyn KeyComparator<Entry>>, tables: &[Arc<SSTable>]) -> impl Iterator<Item=Entry> {
+    fn create_iterator_lx(tables: &[Arc<SSTable>]) -> impl Iterator<Item=Entry> {
         let iterators: Vec<SSTableIterator> = tables.iter().map(|x| {
             SSTableIterator::new(x.clone())
         }).collect();
 
-        let concat_iterator = ConcatIterator::new(iterators);
-
-        // todo: only in debug
-        // Add a check for ascending order without duplicates
-        let checked_iterator = concat_iterator.scan(None, move |state, item| {
-            match state {
-                None => {
-                    *state = Some(item.clone());
-                    Some(item)
-                }
-                Some(prev) => {
-                    let comp = entry_comparator.compare(&item, prev);
-                    if comp.is_eq() {
-                        panic!("Duplicate items are detected");
-                    } else if comp.is_lt() {
-                        panic!("Items are not in ascending order")
-                    }
-                    *state = Some(item.clone());
-                    Some(item)
-                }
-            }
-        });
-
-        checked_iterator
+        return ConcatIterator::new(iterators);
     }
 
 
@@ -365,6 +341,27 @@ pub mod tests {
         assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(25), &key_comparator).unwrap().id, 5);
         assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(30), &key_comparator).unwrap().id, 5);
     }
+    
+    #[test]
+    fn sorted_tables_level0() {
+        let key_comparator = BytesI32Comparator {};
+        let mut level = Level::new(0,
+                               &vec![
+                                   create_sstable(1, 3, 5),
+                                   create_sstable(4, 8, 3),
+                                   create_sstable(9, 14, 4),
+                                   create_sstable(16, 18, 1),
+                                   create_sstable(25, 30, 2),
+                               ]);
+        level.sort_tables(&key_comparator);
+
+        assert_eq!(level.run.get(0).unwrap().id, 1);
+        assert_eq!(level.run.get(1).unwrap().id, 2);
+        assert_eq!(level.run.get(2).unwrap().id, 3);
+        assert_eq!(level.run.get(3).unwrap().id, 4);
+        assert_eq!(level.run.get(4).unwrap().id, 5);
+    }
+    
     fn bsearch_range(ranges: &VecDeque<(i32, i32)>, target: i32) -> Result<usize, usize> {
         return ranges.binary_search_by(|x| {
             let (first, last) = x;

@@ -50,6 +50,20 @@ impl LevelPriority {
             panic!("wrong ids are provided")
         }
     }
+    
+    fn filter_conflicting_priorities(priorities: &mut Vec<LevelPriority>) {
+        let mut visited_levels: HashSet<usize> = HashSet::new();
+
+        priorities.retain(|x| {
+            if visited_levels.contains(&x.to_level_id) || visited_levels.contains(&x.from_level_id) {
+                false
+            } else {
+                visited_levels.insert(x.from_level_id);
+                visited_levels.insert(x.to_level_id);
+                true
+            }
+        });
+    }
 }
 
 pub struct LevelsCompactor {
@@ -120,13 +134,7 @@ impl LevelsCompactor {
                 to_tables,
             };
 
-            if compact_def.is_async() {
-                async_compacts.push(compact_def)
-            } else {
-                for change in self.subcompact_move(compact_def).changes {
-                    total_changes.push(change)
-                }
-            }
+            async_compacts.push(compact_def)
         }
 
         for res in self.subcompact_async(async_compacts)?.into_iter() {
@@ -141,17 +149,6 @@ impl LevelsCompactor {
         self.controller.sync_dir()?;
 
         Ok(true)
-    }
-
-    fn subcompact_move(&self, compact_def: CompactDef) -> CompactRes {
-        let new_tables: Vec<Arc<SSTable>> = compact_def.from_tables.clone();
-
-        let changes = Self::change_levels_inner(self.controller.levels.clone(),
-                                                self.controller.db_opts.clone(), &compact_def, new_tables);
-
-        CompactRes {
-            changes,
-        }
     }
 
     fn subcompact_async(&self, compacts: Vec<CompactDef>) -> Result<Vec<CompactRes>> {
@@ -182,7 +179,11 @@ impl LevelsCompactor {
                                      compact_def: CompactDef) -> Result<CompactRes> {
         let total_iter = Self::create_iterator_for_tables(db_opts.clone(),
                                                           &compact_def);
+        
         let new_tables = LevelsController::create_sstables(db_opts.clone(), id_generator.clone(), total_iter)?;
+        
+        let temp_level = Level::new(compact_def.priority.to_level_id, &new_tables);
+        temp_level.validate(db_opts.key_comparator.as_ref());
 
         let changes = Self::change_levels_inner(levels_lock, db_opts, &compact_def, new_tables);
 
@@ -236,6 +237,9 @@ impl LevelsCompactor {
         let highest_key_ref = &highest_key.last_key;
 
         let to_sstables = to_level.select_sstables(lowest_key_ref, highest_key_ref, self.controller.db_opts.clone());
+        
+        from_level.validate(self.controller.db_opts.key_comparator.as_ref());
+        to_level.validate(self.controller.db_opts.key_comparator.as_ref());
 
         return (from_sstables, to_sstables);
     }
@@ -260,8 +264,8 @@ impl LevelsCompactor {
     fn change_levels(levels_lock: Arc<RwLock<Vec<Level>>>,
                      db_opts: Arc<DbOptions>,
                      priority: &LevelPriority,
-                     keys_to_remove_from: HashSet<usize>,
-                     keys_to_remove_to: HashSet<usize>,
+                     mut keys_to_remove_from: HashSet<usize>,
+                     mut keys_to_remove_to: HashSet<usize>,
                      new_sstables: Vec<Arc<SSTable>>,
     ) -> Vec<ManifestChange> {
         // produce new levels
@@ -281,8 +285,11 @@ impl LevelsCompactor {
 
         let from_tables_complete: VecDeque<Arc<SSTable>> = (&levels[priority.from_level_id].run)
             .iter().filter(|x| {
-            !keys_to_remove_from.contains(&x.id)
+            !keys_to_remove_from.remove(&x.id)
         }).cloned().collect();
+        if !keys_to_remove_from.is_empty() {
+            panic!("not all keys_to_remove_from are deleted")
+        }
 
         let mut new_level_from = Level {
             run: from_tables_complete,
@@ -295,8 +302,11 @@ impl LevelsCompactor {
         // to level delete, add new, sort
         let mut to_tables_complete: VecDeque<Arc<SSTable>> = (&levels[priority.to_level_id].run).iter()
             .filter(|x| {
-                !keys_to_remove_to.contains(&x.id)
+                !keys_to_remove_to.remove(&x.id)
             }).cloned().collect();
+        if !keys_to_remove_to.is_empty() {
+            panic!("not all keys_to_remove_to are deleted")
+        }
 
         drop(levels);
 
@@ -310,6 +320,7 @@ impl LevelsCompactor {
             id: priority.to_level_id,
             size_on_disk: 0,
         };
+        
         new_level_to.calc_size_on_disk();
         new_level_to.sort_tables(db_opts.key_comparator.as_ref());
         new_level_to.validate(db_opts.key_comparator.as_ref());
@@ -355,23 +366,9 @@ impl LevelsCompactor {
             b.score.total_cmp(&a.score)
         });
 
-        Self::filter_conflicting_priorities(&mut priorities);
+        LevelPriority::filter_conflicting_priorities(&mut priorities);
 
         priorities
-    }
-
-    fn filter_conflicting_priorities(priorities: &mut Vec<LevelPriority>) {
-        let mut visited_levels: HashSet<usize> = HashSet::new();
-
-        priorities.retain(|x| {
-            if visited_levels.contains(&x.to_level_id) || visited_levels.contains(&x.from_level_id) {
-                false
-            } else {
-                visited_levels.insert(x.from_level_id);
-                visited_levels.insert(x.to_level_id);
-                true
-            }
-        });
     }
 }
 

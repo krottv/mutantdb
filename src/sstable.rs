@@ -34,7 +34,7 @@ blocks_size: 8 bytes
 
  */
 
-// todo: refactor sstable to use u64 id. Because we possible can have 4 billions sstables, but not 2^63
+// todo: refactor sstable to use u64 id. Because it is possible to have 4 billions sstables, but not 2^63
 pub struct SSTable {
     pub index: TableIndex,
     // cache for blocks. Simpler then hashmap based
