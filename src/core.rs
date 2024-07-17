@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::{spawn};
 
 use bytes::Bytes;
@@ -17,7 +17,7 @@ use crate::sstable::SSTable;
 
 pub struct Mutant {
     inner: Arc<InnerCore>,
-    compaction_sx: Option<Sender<Arc<Memtable>>>,
+    start_compaction_sx: Option<Sender<Arc<Memtable>>>,
     closer: Closer,
 }
 
@@ -26,6 +26,7 @@ pub struct InnerCore {
     compactor: Box<dyn Compactor>,
     memtables: RwLock<Memtables>,
     id_generator: Arc<SSTableIdGenerator>,
+    condvar_pair: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl Mutant {
@@ -37,17 +38,19 @@ impl Mutant {
 
         let compactor = open_compactor(id_generator.clone(), db_opts.clone())?;
 
+        let condvar_pair = Arc::new((Mutex::new(false), Condvar::new()));
         let inner = InnerCore {
             db_opts,
             compactor,
             memtables,
             id_generator,
+            condvar_pair
         };
 
         let mut res = Mutant {
             inner: Arc::new(inner),
-            compaction_sx: None,
-            closer: Closer::new(),
+            start_compaction_sx: None,
+            closer: Closer::new()
         };
 
         if start_compaction {
@@ -58,8 +61,11 @@ impl Mutant {
     }
 
     pub fn start_compact_job(&mut self) {
+        if self.start_compaction_sx.is_some() {
+            panic!("compact job has already started")
+        }
         let (compaction_sx, compaction_rx) = crossbeam_channel::unbounded();
-        self.compaction_sx = Some(compaction_sx);
+        self.start_compaction_sx = Some(compaction_sx);
 
         let inner = self.inner.clone();
         let closer_rx = self.closer.receive.clone();
@@ -69,13 +75,25 @@ impl Mutant {
                 select! {
                     recv(compaction_rx) -> msg => {
                         if let Ok(memtable) = msg {
-                            inner.do_compaction_no_fail(memtable)
+                            *inner.condvar_pair.0.lock().unwrap() = true;
+                            inner.do_compaction_no_fail(memtable);
+                            if compaction_rx.is_empty() {
+                                *inner.condvar_pair.0.lock().unwrap() = false;
+                                inner.condvar_pair.1.notify_all();
+                            }
                         }
                     },
                     recv(closer_rx) -> _msg => break
                 }
             }
         });
+    }
+    
+    pub fn await_pending_compaction(&self) {
+        let mutex_guard = self.inner.condvar_pair.0.lock().unwrap();
+        if *mutex_guard {
+            let _unused = self.inner.condvar_pair.1.wait(mutex_guard).unwrap();
+        }
     }
 
     pub fn add(&self, key: Key, value: Bytes, user_meta: u8) -> Result<()> {
@@ -107,7 +125,7 @@ impl Mutant {
         if memtables.is_need_to_freeze(Entry::get_encoded_size(&key, &val_obj)) {
             let frozen = memtables.freeze_last()?;
             // send no matter receiver is hang up.
-            if let Some(sx) = &self.compaction_sx {
+            if let Some(sx) = &self.start_compaction_sx {
                 let _res = sx.send(frozen);
             }
         }
@@ -140,12 +158,14 @@ impl Mutant {
 
         return levels_val_res;
     }
+    
+    pub fn log_levels(&self) {
+        self.inner.compactor.get_controller().log_levels();
+    }
 }
 
 impl Drop for Mutant {
     fn drop(&mut self) {
-        // todo: only in debug
-        self.inner.compactor.get_controller().log_levels();
         self.closer.close();
     }
 }
@@ -200,16 +220,11 @@ Test cases:
  - check that all values are added and only the latest version of them is available
  - check that compaction happened and smth is present in compact
  - check iterator
-
- todo later:
- - check restoration (manifest)
  */
 
 #[cfg(test)]
 pub mod tests {
     use std::sync::Arc;
-    use std::thread::sleep;
-    use std::time::Duration;
     use bytes::Bytes;
     use tempfile::tempdir;
     use crate::compact::{CompactionOptions, SimpleLeveledOpts};
@@ -258,9 +273,7 @@ pub mod tests {
             core.add(int_to_bytes(i), int_to_bytes(i * 10), 0).unwrap();
         }
 
-        //todo: wait for pending compactions to be finished instead of sleep.
-        // 100ms is not enough
-        sleep(Duration::from_millis(2000));
+        core.await_pending_compaction();
 
         assert_eq!(core.inner.memtables.read().unwrap().count(), 1);
         assert!(core.inner.compactor.get_controller().get_sstable_count_total() >= 1);

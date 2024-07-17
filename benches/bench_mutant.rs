@@ -37,7 +37,7 @@ fn get_opts() -> (TempDir, Arc<DbOptions>) {
 
         num_levels: 7,
 
-        level0_file_num_compaction_trigger: 3,
+        level0_file_num_compaction_trigger: 2,
 
         num_parallel_compact: 2
     });
@@ -65,11 +65,11 @@ fn bench_mutant(c: &mut Criterion) {
                 let (tmp_dir, opts) = get_opts();
                 last_tmp_dir = tmp_dir;
                 last_opts = opts.clone();
-                let mutant = Arc::new(Mutant::open(opts, true).unwrap());
+                let db = Arc::new(Mutant::open(opts, true).unwrap());
                 
                 let now = Instant::now();
                 rand_add(
-                    mutant,
+                    db.clone(),
                     KEY_NUMS,
                     CHUNK_SIZE,
                     BATCH_SIZE,
@@ -77,6 +77,9 @@ fn bench_mutant(c: &mut Criterion) {
                     true,
                 );
                 total = total.add(now.elapsed());
+                
+                db.await_pending_compaction();
+                db.log_levels();
             });
 
             total
@@ -93,11 +96,11 @@ fn bench_mutant(c: &mut Criterion) {
                 last_tmp_dir = tmp_dir;
                 last_opts = opts.clone();
 
-                let mutant = Arc::new(Mutant::open(opts, true).unwrap());
+                let db = Arc::new(Mutant::open(opts, true).unwrap());
 
                 let now = Instant::now();
                 rand_add(
-                    mutant,
+                    db.clone(),
                     KEY_NUMS,
                     CHUNK_SIZE,
                     BATCH_SIZE,
@@ -105,6 +108,8 @@ fn bench_mutant(c: &mut Criterion) {
                     false,
                 );
                 total = total.add(now.elapsed());
+                db.await_pending_compaction();
+                db.log_levels();
             });
 
             total
@@ -113,10 +118,10 @@ fn bench_mutant(c: &mut Criterion) {
 
     c.bench_function("mutant randread small value", |b| {
 
-        let mutant = Arc::new(Mutant::open(last_opts.clone(), true).unwrap());
+        let db = Arc::new(Mutant::open(last_opts.clone(), true).unwrap());
         
         b.iter(|| {
-            rand_read(mutant.clone(), KEY_NUMS, CHUNK_SIZE, SMALL_VALUE_SIZE);
+            rand_read(db.clone(), KEY_NUMS, CHUNK_SIZE, SMALL_VALUE_SIZE);
         });
     });
 
