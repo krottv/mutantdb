@@ -60,8 +60,7 @@ pub struct Block {
 }
 
 impl SSTable {
-    //todo: if creating from memtable, then first_key and last_key can be obtained from SkipList in O(1) time
-    // without IO
+    
     pub fn from_builder(index: TableIndex,
                         file_path: PathBuf,
                         opts: Arc<DbOptions>,
@@ -71,9 +70,9 @@ impl SSTable {
             let file = File::open(&file_path)?;
             let mmap = ManuallyDrop::new(Mmap::map(&file)?);
             mmap.advise(Advice::Random)?;
-            
-            
-            let mut sstable = SSTable {
+
+
+            let sstable = SSTable {
                 index,
                 mmap,
                 file_path,
@@ -82,9 +81,9 @@ impl SSTable {
                 last_key: Bytes::new(),
                 size_on_disk,
                 delete_on_drop: atomic::AtomicBool::new(false),
-                id
+                id,
             };
-            sstable.init_first_last_keys();
+
             return Ok(sstable);
         }
     }
@@ -126,12 +125,17 @@ impl SSTable {
 
         let size_on_disk = reader.stream_position()?;
 
-        return Self::from_builder(index, file_path, opts, size_on_disk, id);
+        let mut sstable = Self::from_builder(index, file_path, opts, size_on_disk, id)?;
+        
+        sstable.init_first_last_keys();
+        sstable.validate();
+        
+        Ok(sstable)
     }
 
     pub fn init_first_last_keys(&mut self) {
         if self.index.blocks.is_empty() {
-            return;
+            panic!("trying to init empty sstable")
         }
 
         // unwrap because size is guaranteed to be non 0
@@ -140,6 +144,15 @@ impl SSTable {
 
         let mut last_block = self.get_block(self.index.blocks.get(self.index.blocks.len() - 1).unwrap());
         self.last_key = last_block.entries.pop_back().unwrap().key;
+    }
+    
+    pub fn validate(&self) {
+        
+        if self.opts.key_comparator.compare(&self.last_key, &self.first_key).is_lt() {
+            panic!("invalid table key right < left. table_id {}, key_count {}, last_key {}, first_key {}",
+                   self.id, self.index.key_count, String::from_utf8(self.last_key.to_vec()).unwrap(),
+                   String::from_utf8(self.first_key.to_vec()).unwrap())
+        }
     }
 
     // binary search. 
@@ -481,7 +494,7 @@ pub(crate) mod tests {
             last_key: Bytes::from(28i32.to_be_bytes().to_vec()),
             size_on_disk: 0,
             delete_on_drop: atomic::AtomicBool::new(false),
-            id: 1
+            id: 1,
         };
 
         let mut key = Bytes::from(16i32.to_be_bytes().to_vec());

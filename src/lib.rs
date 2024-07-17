@@ -6,7 +6,7 @@ pub mod comparator;
 pub mod db_options;
 pub mod errors;
 mod sstable;
-mod compact;
+pub mod compact;
 pub mod core;
 pub mod builder;
 pub mod iterators;

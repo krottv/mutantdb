@@ -28,6 +28,8 @@ pub struct Builder {
     file_path: PathBuf,
     max_version: u64,
     sstable_id: usize,
+    first_key: Bytes,
+    last_key: Bytes,
 }
 
 impl Builder {
@@ -58,6 +60,8 @@ impl Builder {
             file_path,
             max_version: 0,
             sstable_id,
+            first_key: Bytes::new(),
+            last_key: Bytes::new(),
         })
     }
 
@@ -65,7 +69,17 @@ impl Builder {
         if self.counter == 0 {
             self.block.key = key.clone();
             self.block.offset = self.block_offset;
+
+            self.first_key = key.clone();
+        } else {
+            let ord = self.opts.key_comparator.compare(&key, &self.last_key);
+            if ord.is_eq() {
+                panic!("shouldn't add duplicated key")
+            } else if ord.is_lt() {
+                panic!("keys are in wrong order. should be ascending")
+            }
         }
+        self.last_key = key.clone();
 
         // write entry
         let ensure_size = Entry::get_encoded_size(key, val_obj);
@@ -115,12 +129,19 @@ impl Builder {
 
         let size_on_disk = self.writer.stream_position()?;
 
-        return SSTable::from_builder(self.index, self.file_path, self.opts.clone(), size_on_disk, self.sstable_id);
+        let mut sstable = SSTable::from_builder(self.index, self.file_path, self.opts.clone(),
+                                     size_on_disk, self.sstable_id)?;
+        sstable.first_key = self.first_key;
+        sstable.last_key = self.last_key;
+        
+        sstable.validate();
+        
+        Ok(sstable)
     }
 
     pub fn build_from_memtable(mem: Arc<Memtable>,
                                file_path: PathBuf,
-                               opts: Arc<DbOptions>, 
+                               opts: Arc<DbOptions>,
                                sstable_id: usize) -> Result<SSTable> {
         let mem_inner = mem.inner.read().unwrap();
         let max_block_size = max(opts.block_max_size, mem_inner.compute_max_entry_size() as u32);

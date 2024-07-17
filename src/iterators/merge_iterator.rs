@@ -5,7 +5,6 @@ It will take multiple sstables and produce always valid key next in sorted order
 In this way to compact, we would only need to create new SSTables from the iterator.
 
 We assume that the first iterator has the earliest data.
-Also assume that there's no duplicates inside a single iterator
 */
 
 use std::cmp::Ordering;
@@ -16,9 +15,9 @@ use crate::comparator::KeyComparator;
 
 // iterator is not a generic to be able to combine different iterators
 pub struct MergeIterator<Item> {
-    iterators: Vec<Box<dyn Iterator<Item = Item>>>,
+    iterators: Vec<Box<dyn Iterator<Item=Item>>>,
     heap: BinaryHeap<HeapElem<Item>>,
-    comparator: Arc<dyn KeyComparator<Item>>
+    comparator: Arc<dyn KeyComparator<Item>>,
 }
 
 // todo: ugly that we cannot pass lambda to BinaryHeap, now we got overhead of tons of reference counters
@@ -39,7 +38,7 @@ impl<T> Eq for HeapElem<T> {}
 
 impl<T> PartialOrd for HeapElem<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        return Some(self.cmp(other))
+        return Some(self.cmp(other));
     }
 }
 
@@ -71,18 +70,16 @@ Next:
     - add item or skip if it is == heap.head
 */
 impl<Item> MergeIterator<Item> {
-    
-    pub fn new(iterators: Vec<Box<dyn Iterator<Item = Item>>>, comparator: Arc<dyn KeyComparator<Item>>) -> Self {
+    pub fn new(iterators: Vec<Box<dyn Iterator<Item=Item>>>, comparator: Arc<dyn KeyComparator<Item>>) -> Self {
         let mut heap = BinaryHeap::new();
         let mut iterators = iterators;
-        
+
         for i in 0..iterators.len() {
-            
             if let Some(entry) = iterators[i].next() {
                 heap.push(HeapElem {
                     entry,
                     comparator: comparator.clone(),
-                    iterator_index: i
+                    iterator_index: i,
                 });
             }
         }
@@ -90,7 +87,7 @@ impl<Item> MergeIterator<Item> {
         MergeIterator {
             iterators,
             heap,
-            comparator
+            comparator,
         }
     }
 
@@ -100,10 +97,10 @@ impl<Item> MergeIterator<Item> {
                 return Some(entry);
             }
         }
-        
-        return None
+
+        return None;
     }
-    
+
     fn pop_heap(&mut self) -> Option<Item> {
         if let Some(heap_popped) = self.heap.pop() {
 
@@ -112,11 +109,11 @@ impl<Item> MergeIterator<Item> {
                 self.heap.push(HeapElem {
                     entry: nxt,
                     comparator: self.comparator.clone(),
-                    iterator_index: heap_popped.iterator_index
+                    iterator_index: heap_popped.iterator_index,
                 });
             }
 
-            return Some(heap_popped.entry)
+            return Some(heap_popped.entry);
         } else {
             None
         }
@@ -137,14 +134,13 @@ heap = [3, 3, 3]
 res = [0, 1]
 
 - when popping, need to check that item in heap is not like previous
-*/
+ */
 
 impl<Item> Iterator for MergeIterator<Item> {
     type Item = Item;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(first_pop) = self.pop_heap() {
-            
             loop {
                 if let Some(peek) = self.heap.peek() {
                     if self.comparator.compare(&peek.entry, &first_pop).is_eq() {
@@ -152,12 +148,11 @@ impl<Item> Iterator for MergeIterator<Item> {
                     } else {
                         break;
                     }
-                    
                 } else {
                     break;
-                }          
+                }
             }
-            
+
             Some(first_pop)
         } else {
             None
@@ -170,13 +165,9 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use tempfile::TempDir;
 
     use crate::comparator::BytesStringUtf8Comparator;
     use crate::entry::{Entry, EntryComparator, META_ADD, ValObj};
-    use crate::iterators::sstable_iterator::SSTableIterator;
-    use crate::db_options::DbOptions;
-    use crate::sstable::tests::create_sstable;
 
     use super::*;
 
@@ -187,30 +178,24 @@ mod tests {
                 value: Bytes::from(value.to_string()),
                 meta: META_ADD,
                 user_meta: key,
-                version: value as u64
-            }
+                version: value as u64,
+            },
         }
     }
 
     #[test]
     fn single_merge_iterator() {
-        let tmp_dir = TempDir::new().unwrap();
-        let opts = DbOptions {
-            block_max_size: 1,
-            path: tmp_dir.into_path(),
-            ..Default::default()
-        };
-        opts.create_dirs().unwrap();
         let comparator = Arc::new(BytesStringUtf8Comparator {});
         let entry_comparator = Arc::new(EntryComparator::new(comparator));
 
         let e1 = new_entry(1, 1);
-        let e3 = new_entry(3, 3);
         let e2 = new_entry(2, 2);
+        let e3 = new_entry(3, 3);
         let e4 = new_entry(4, 4);
 
-        let sstable = create_sstable(Arc::new(opts), vec![e4.clone(), e3.clone(), e2.clone(), e1.clone()], 1);
-        let iter = Box::new(SSTableIterator::new(Arc::new(sstable)));
+        let vec = vec![e1.clone(), e2.clone(), e3.clone(), e4.clone()];
+        let iter = Box::new(vec.into_iter());
+
         let mut merge_iter = MergeIterator::new(vec![iter], entry_comparator);
 
         assert_eq!(merge_iter.next(), Some(e1));
@@ -222,59 +207,31 @@ mod tests {
 
     #[test]
     fn all_iterators_empty_test() {
-        let tmp_dir = TempDir::new().unwrap();
-        let opts = Arc::new(DbOptions {
-            block_max_size: 1000,
-            path: tmp_dir.into_path(),
-            ..Default::default()
-        });
-        opts.create_dirs().unwrap();
         let comparator = Arc::new(BytesStringUtf8Comparator {});
         let entry_comparator = Arc::new(EntryComparator::new(comparator));
-        let sstable1 = create_sstable(opts.clone(),vec![], 1);
-        let sstable2 = create_sstable(opts.clone(),vec![], 2);
 
-        let iter1 = Box::new(SSTableIterator::new(Arc::new(sstable1)));
-        let iter2 = Box::new(SSTableIterator::new(Arc::new(sstable2)));
+        let iter1 = Box::new(Vec::new().into_iter());
+        let iter2 = Box::new(Vec::new().into_iter());
 
         let mut merge_iter = MergeIterator::new(vec![iter1, iter2], entry_comparator);
-
         assert_eq!(merge_iter.next(), None);
     }
 
     #[test]
     fn basic_merge_test() {
-        let tmp_dir = TempDir::new().unwrap();
-        let opts = Arc::new(DbOptions {
-            block_max_size: 1000,
-            path: tmp_dir.into_path(),
-            ..Default::default()
-        });
-        opts.create_dirs().unwrap();
         let comparator = Arc::new(BytesStringUtf8Comparator {});
         let entry_comparator = Arc::new(EntryComparator::new(comparator));
-        
+
         let e1 = new_entry(1, 1);
         let e2 = new_entry(2, 2);
         let e3 = new_entry(3, 3);
         let e4 = new_entry(4, 4);
 
-        let sstable1 = Arc::new(create_sstable(opts.clone(), vec![e1.clone(), e3.clone()], 1));
-        let sstable2 = Arc::new(create_sstable(opts.clone(), vec![e2.clone(), e4.clone()], 2));
+        let vec1 = vec![e1.clone(), e3.clone()];
+        let vec2 = vec![e2.clone(), e4.clone()];
 
-        let mut iter1 = Box::new(SSTableIterator::new(sstable1.clone()));
-        let mut iter2 = Box::new(SSTableIterator::new(sstable2.clone()));
-
-        assert_eq!(iter1.next(), Some(e1.clone()));
-        assert_eq!(iter1.next(), Some(e3.clone()));
-        assert_eq!(iter1.next(), None);
-
-        assert_eq!(iter2.next(), Some(e2.clone()));
-        assert_eq!(iter2.next(), Some(e4.clone()));
-        assert_eq!(iter2.next(), None);
-
-        iter1 = Box::new(SSTableIterator::new(sstable1.clone()));
-        iter2 = Box::new(SSTableIterator::new(sstable2.clone()));
+        let iter1 = Box::new(vec1.into_iter());
+        let iter2 = Box::new(vec2.into_iter());
 
         let mut merge_iter = MergeIterator::new(vec![iter1, iter2], entry_comparator);
 
@@ -287,63 +244,76 @@ mod tests {
 
     #[test]
     fn duplicate_keys_test() {
-        let tmp_dir = TempDir::new().unwrap();
-        let opts = Arc::new(DbOptions {
-            block_max_size: 1000,
-            path: tmp_dir.into_path(),
-            ..Default::default()
-        });
-        opts.create_dirs().unwrap();
-        
         let comparator = Arc::new(BytesStringUtf8Comparator {});
         let entry_comparator = Arc::new(EntryComparator::new(comparator));
-        
+
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), META_ADD);
         let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), META_ADD);
         let e3 = Entry::new(Bytes::from("2key"), Bytes::from("value3"), META_ADD);
         let e4 = Entry::new(Bytes::from("3key"), Bytes::from("value4"), META_ADD);
 
-        let sstable1 = Arc::new(create_sstable(opts.clone(), vec![e1.clone(), e3.clone()], 1));
-        let sstable2 = Arc::new(create_sstable(opts.clone(), vec![e2.clone(), e4.clone()], 2));
+        let vec1 = vec![e1.clone(), e3.clone()];
+        let vec2 = vec![e2.clone(), e4.clone()];
 
-        let iter1 = Box::new(SSTableIterator::new(sstable1));
-        let iter2 = Box::new(SSTableIterator::new(sstable2));
+        let iter1 = Box::new(vec1.into_iter());
+        let iter2 = Box::new(vec2.into_iter());
 
         let mut merge_iter = MergeIterator::new(vec![iter1, iter2], entry_comparator);
 
         assert_eq!(merge_iter.next(), Some(e1));
-        // e2 is removed because is it from the iterator that is next in order
         assert_eq!(merge_iter.next(), Some(e3));
         assert_eq!(merge_iter.next(), Some(e4));
         assert_eq!(merge_iter.next(), None);
     }
 
     #[test]
-    fn empty_iterators_test() {
-        let tmp_dir = TempDir::new().unwrap();
-        let opts = Arc::new(DbOptions {
-            block_max_size: 1000,
-            path: tmp_dir.into_path(),
-            ..Default::default()
-        });
-        opts.create_dirs().unwrap();
-        
+    fn duplicate_keys_inside_single_test() {
         let comparator = Arc::new(BytesStringUtf8Comparator {});
         let entry_comparator = Arc::new(EntryComparator::new(comparator));
-        
+
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), META_ADD);
         let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), META_ADD);
+        let e21 = Entry::new(Bytes::from("2key"), Bytes::from("value21"), META_ADD);
+        let e22 = Entry::new(Bytes::from("2key"), Bytes::from("value22"), META_ADD);
+        let e23 = Entry::new(Bytes::from("2key"), Bytes::from("value23"), META_ADD);
+        let e24 = Entry::new(Bytes::from("2key"), Bytes::from("value24"), META_ADD);
+        let e4 = Entry::new(Bytes::from("3key"), Bytes::from("value4"), META_ADD);
 
-        let sstable1 = Arc::new(create_sstable(opts.clone(),vec![e1.clone(), e2.clone()], 1));
-        let sstable2 = Arc::new(create_sstable(opts.clone(),vec![], 2));
+        let vec1 = vec![e1.clone(), e21.clone(), e22.clone(), e23.clone()];
+        let vec2 = vec![e2.clone(), e24.clone(), e4.clone()];
 
-        let iter1 = Box::new(SSTableIterator::new(sstable1));
-        let iter2 = Box::new(SSTableIterator::new(sstable2));
+        let iter1 = Box::new(vec1.into_iter());
+        let iter2 = Box::new(vec2.into_iter());
 
         let mut merge_iter = MergeIterator::new(vec![iter1, iter2], entry_comparator);
 
         assert_eq!(merge_iter.next(), Some(e1));
-        assert_eq!(merge_iter.next(), Some(e2));
+        // e2 is removed because is it from the iterator that is next in order
+        assert_eq!(merge_iter.next(), Some(e21));
+        assert_eq!(merge_iter.next(), Some(e4));
+        assert_eq!(merge_iter.next(), None);
+    }
+
+    #[test]
+    fn empty_iterators_test() {
+        let comparator = Arc::new(BytesStringUtf8Comparator {});
+        let entry_comparator = Arc::new(EntryComparator::new(comparator));
+
+        let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), META_ADD);
+        let e21 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), META_ADD);
+        let e22 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), META_ADD);
+        let e23 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), META_ADD);
+        let e24 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), META_ADD);
+        
+        let vec1 = vec![e1.clone(),
+                             e21.clone(), e22.clone(), e23.clone(), e24.clone()];
+        let vec2 = vec![];
+
+        let mut merge_iter = MergeIterator::new(
+            vec![Box::new(vec1.into_iter()), Box::new(vec2.into_iter())], entry_comparator);
+
+        assert_eq!(merge_iter.next(), Some(e1));
+        assert_eq!(merge_iter.next(), Some(e24));
         assert_eq!(merge_iter.next(), None);
     }
 }

@@ -421,14 +421,12 @@ impl<KEY, VALUE> SkiplistRaw<KEY, VALUE> where
         self.size = 0;
         self.height = 1;
 
-        unsafe {
-            // release all dummies except head bottom
-            Self::release_all_levels(self.head_bottom);
-            let dummy = Box::into_raw(Box::new(SkipNode::new(SkipData::Dummy())));
+        // release all dummies except head bottom
+        Self::release_all_levels(self.head_bottom);
+        let dummy = Box::into_raw(Box::new(SkipNode::new(SkipData::Dummy())));
 
-            self.head = dummy;
-            self.head_bottom = dummy;
-        }
+        self.head = dummy;
+        self.head_bottom = dummy;
     }
 
     pub fn to_string_by_level(&self) -> String {

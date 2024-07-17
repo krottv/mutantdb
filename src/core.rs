@@ -3,23 +3,22 @@ use std::thread::{spawn};
 
 use bytes::Bytes;
 use crossbeam_channel::{select, Sender};
-
 use crate::builder::Builder;
 use crate::closer::Closer;
 use crate::entry::{Entry, EntryComparator, Key, META_ADD, META_DELETE, ValObj};
-use crate::errors::Error::IllegalState;
 use crate::errors::Result;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::compact::{open_compactor, Compactor};
 use crate::memtables::Memtables;
 use crate::db_options::{DbOptions};
+use crate::memtables::memtable::Memtable;
 use crate::sstable::id_generator::SSTableIdGenerator;
 use crate::sstable::SSTable;
 
 pub struct Mutant {
     inner: Arc<InnerCore>,
-    sx: Option<Sender<()>>,
-    closer: Closer
+    compaction_sx: Option<Sender<Arc<Memtable>>>,
+    closer: Closer,
 }
 
 pub struct InnerCore {
@@ -30,9 +29,9 @@ pub struct InnerCore {
 }
 
 impl Mutant {
-    pub fn open(db_opts: Arc<DbOptions>) -> Result<Self> {
+    pub fn open(db_opts: Arc<DbOptions>, start_compaction: bool) -> Result<Self> {
         db_opts.create_dirs()?;
-        
+
         let memtables = RwLock::new(Memtables::open(db_opts.clone())?);
         let id_generator = Arc::new(SSTableIdGenerator::new(0));
 
@@ -45,18 +44,22 @@ impl Mutant {
             id_generator,
         };
 
-        Ok(
-            Mutant {
-                inner: Arc::new(inner),
-                sx: None,
-                closer: Closer::new()
-            }
-        )
+        let mut res = Mutant {
+            inner: Arc::new(inner),
+            compaction_sx: None,
+            closer: Closer::new(),
+        };
+
+        if start_compaction {
+            res.start_compact_job();
+        }
+
+        Ok(res)
     }
 
     pub fn start_compact_job(&mut self) {
-        let (sx, rx) = crossbeam_channel::unbounded();
-        self.sx = Some(sx);
+        let (compaction_sx, compaction_rx) = crossbeam_channel::unbounded();
+        self.compaction_sx = Some(compaction_sx);
 
         let inner = self.inner.clone();
         let closer_rx = self.closer.receive.clone();
@@ -64,18 +67,15 @@ impl Mutant {
         let _handle = spawn(move || {
             loop {
                 select! {
-                    recv(rx) -> _msg => inner.do_compaction_no_fail(),
+                    recv(compaction_rx) -> msg => {
+                        if let Ok(memtable) = msg {
+                            inner.do_compaction_no_fail(memtable)
+                        }
+                    },
                     recv(closer_rx) -> _msg => break
                 }
             }
         });
-    }
-
-    pub fn notify_memtable_freeze(&self) {
-        // send no matter receiver is hang up.
-        if let Some(sx) = &self.sx {
-            let _res = sx.send(());
-        }
     }
 
     pub fn add(&self, key: Key, value: Bytes, user_meta: u8) -> Result<()> {
@@ -105,11 +105,10 @@ impl Mutant {
         // lock-free skiplist wouldn't bring any benefits in such case.
         let mut memtables = self.inner.memtables.write().unwrap();
         if memtables.is_need_to_freeze(Entry::get_encoded_size(&key, &val_obj)) {
-
-            {
-                memtables.freeze_last()?;
-
-                self.notify_memtable_freeze();
+            let frozen = memtables.freeze_last()?;
+            // send no matter receiver is hang up.
+            if let Some(sx) = &self.compaction_sx {
+                let _res = sx.send(frozen);
             }
         }
         drop(memtables);
@@ -145,6 +144,8 @@ impl Mutant {
 
 impl Drop for Mutant {
     fn drop(&mut self) {
+        // todo: only in debug
+        self.inner.compactor.get_controller().log_levels();
         self.closer.close();
     }
 }
@@ -165,28 +166,28 @@ impl IntoIterator for &Mutant {
 
 impl InnerCore {
     // flushing is sequential for now
-    fn do_compaction(&self) -> Result<()> {
+    fn do_compaction_default(&self) -> Result<()> {
+        let memtables = self.memtables.read().unwrap();
+        let memtable = memtables.get_back().unwrap();
+        drop(memtables);
+
+        return self.do_compaction(memtable);
+    }
+    fn do_compaction(&self, memtable: Arc<Memtable>) -> Result<()> {
+        memtable.truncate()?;
+        let new_id = self.id_generator.get_new();
+        let sstable_path = self.db_opts.sstables_path().join(SSTable::create_path(new_id));
+        let sstable = Builder::build_from_memtable(memtable.clone(), sstable_path, self.db_opts.clone(), new_id)?;
+        self.compactor.add_to_l0(sstable)?;
         {
-            if let Some(memtable) = self.memtables.read().unwrap().get_back() {
-                memtable.truncate()?;
-                let new_id = self.id_generator.get_new();
-                let sstable_path = self.db_opts.sstables_path().join(SSTable::create_path(new_id));
-                let sstable = Builder::build_from_memtable(memtable.clone(), sstable_path, self.db_opts.clone(), new_id)?;
-                self.compactor.add_to_l0(sstable)?;
-            } else {
-                return Err(IllegalState("memtable is absent in do compaction".to_string()));
-            }
-        }
-        {
-            self.memtables.write().unwrap().pop_back()?
+            self.memtables.write().unwrap().remove(memtable);
         }
 
         return Ok(());
     }
 
-
-    fn do_compaction_no_fail(&self) {
-        let res = self.do_compaction();
+    fn do_compaction_no_fail(&self, memtable: Arc<Memtable>) {
+        let res = self.do_compaction(memtable);
         if let Some(err) = res.err() {
             log::warn!("compaction error {}", err.to_string());
         }
@@ -247,8 +248,7 @@ pub mod tests {
         std::fs::create_dir_all(&db_opts.wal_path()).unwrap();
         std::fs::create_dir_all(&db_opts.sstables_path()).unwrap();
 
-        let mut core = Mutant::open(db_opts).unwrap();
-        let _handle = core.start_compact_job();
+        let core = Mutant::open(db_opts, true).unwrap();
 
         for i in 1..100 {
             core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
@@ -260,7 +260,7 @@ pub mod tests {
 
         //todo: wait for pending compactions to be finished instead of sleep.
         // 100ms is not enough
-        sleep(Duration::from_millis(1000));
+        sleep(Duration::from_millis(2000));
 
         assert_eq!(core.inner.memtables.read().unwrap().count(), 1);
         assert!(core.inner.compactor.get_controller().get_sstable_count_total() >= 1);
@@ -293,7 +293,7 @@ pub mod tests {
         std::fs::create_dir_all(&db_opts.wal_path()).unwrap();
         std::fs::create_dir_all(&db_opts.sstables_path()).unwrap();
 
-        let core = Mutant::open(db_opts).unwrap();
+        let core = Mutant::open(db_opts, false).unwrap();
 
         for i in 1..100 {
             core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
@@ -310,7 +310,7 @@ pub mod tests {
         let mut iteration = 0usize;
         while memtables_count < iteration {
             iteration += 1;
-            core.inner.do_compaction().unwrap();
+            core.inner.do_compaction_default().unwrap();
 
             assert_eq!(core.inner.memtables.read().unwrap().count(), memtables_count - iteration);
             assert_eq!(core.inner.compactor.get_controller().get_sstable_count_total(), 1);
@@ -361,7 +361,7 @@ pub mod tests {
         std::fs::create_dir_all(&db_opts.wal_path()).unwrap();
         std::fs::create_dir_all(&db_opts.sstables_path()).unwrap();
 
-        let core = Mutant::open(db_opts).unwrap();
+        let core = Mutant::open(db_opts, false).unwrap();
 
         for i in 1..100 {
             core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
@@ -378,7 +378,7 @@ pub mod tests {
         let mut iteration = 0usize;
         while memtables_count < iteration {
             iteration += 1;
-            core.inner.do_compaction().unwrap();
+            core.inner.do_compaction_default().unwrap();
 
             assert_eq!(core.inner.memtables.read().unwrap().count(), memtables_count - iteration);
             assert_eq!(core.inner.compactor.get_controller().get_sstable_count_total(), iteration);

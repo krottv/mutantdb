@@ -106,7 +106,7 @@ impl Compactor for SimpleLevelsCompactor {
         let sstable_arc = Arc::new(sstable);
         {
             self.controller.levels.write().unwrap().get_mut(0)
-                .unwrap().add(sstable_arc);
+                .unwrap().add_front(sstable_arc);
         }
         
         let mut level_id = 0usize;

@@ -11,7 +11,6 @@ use crate::manifest::ManifestWriter;
 use crate::util::sync_dir;
 
 #[allow(dead_code)]
-
 pub struct LevelsController {
     pub id_generator: Arc<SSTableIdGenerator>,
     pub db_opts: Arc<DbOptions>,
@@ -43,7 +42,7 @@ impl LevelsController {
                 
                 let open_res = SSTable::open(sstable_path, db_opts.clone(), *table_id as usize);
                 if let Ok(sstable) = open_res {
-                    levels[*level_id].add(Arc::new(sstable));
+                    levels[*level_id].add_front(Arc::new(sstable));
                 } else {
                     log::log!(log::Level::Warn, "can't restore sstable with id {}, err {}", *table_id, open_res.err().unwrap());
                 }
@@ -129,7 +128,9 @@ impl LevelsController {
         Builder::new(path, db_opts.clone(), db_opts.block_max_size as usize, sstable_id)
     }
 
-    pub fn create_sstables(db_opts: Arc<DbOptions>, id_generator: Arc<SSTableIdGenerator>, iterator: MergeIterator<Entry>) -> Result<Vec<Arc<SSTable>>> {
+    pub fn create_sstables(db_opts: Arc<DbOptions>, 
+                           id_generator: Arc<SSTableIdGenerator>,
+                           iterator: MergeIterator<Entry>) -> Result<Vec<Arc<SSTable>>> {
         let mut builder = Self::new_builder(db_opts.clone(), id_generator.clone())?;
         let mut builder_entries_size: u64 = 0;
         let mut tables = Vec::new();

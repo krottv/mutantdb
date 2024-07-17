@@ -103,7 +103,7 @@ impl Memtables {
     1. move mutable to immutable
     2. create new mutable
      */
-    pub fn freeze_last(&mut self) -> Result<()> {
+    pub fn freeze_last(&mut self) -> Result<Arc<Memtable>> {
         if self.mutable.size() == 0 {
             panic!("can't freeze memtable of 0 size")
         }
@@ -112,15 +112,26 @@ impl Memtables {
         let new_memtable = Arc::new(Memtable::new(new_id, self.next_wal_path(), self.opts.clone())?);
 
         let old_memtable = std::mem::replace(&mut self.mutable, new_memtable);
-        self.immutables.push_front(old_memtable);
+        self.immutables.push_front(old_memtable.clone());
 
-        return Ok(());
+        return Ok(old_memtable);
     }
 
     pub fn get_back(&self) -> Option<Arc<Memtable>> {
         return self.immutables.back().map(|x| {
             x.clone()
         })
+    }
+    
+    pub fn remove(&mut self, memtable: Arc<Memtable>) {
+        let position = self.immutables.iter().rposition(|x| {
+            x.id == memtable.id
+        });
+        if let Some(pos) = position {
+            self.immutables.remove(pos);
+        } else {
+            panic!("trying to remove non existent memtable {}, whereas size is {}", memtable.id, self.immutables.len());
+        }
     }
 
     pub fn pop_back(&mut self) -> Result<()> {

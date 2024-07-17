@@ -1,9 +1,11 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+
 use bytes::Bytes;
+
+use crate::compact::{CompactionOptions, LeveledOpts};
 use crate::comparator::{BytesStringUtf8Comparator, KeyComparator};
-use crate::compact::{CompactionOptions, SimpleLeveledOpts};
 use crate::errors::Result;
 
 pub struct DbOptions {
@@ -39,7 +41,7 @@ impl Default for DbOptions {
             // 4kb power of 2
             block_max_size: 4096,
             
-            compaction: Arc::new(CompactionOptions::SimpleLeveled(SimpleLeveledOpts::default())),
+            compaction: Arc::new(CompactionOptions::Leveled(LeveledOpts::default())),
             
             // 1 instance of ManifestChange approximately 15 bytes.
             manifest_deletion_threshold: 5000
