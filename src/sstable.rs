@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic;
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, Bytes, BytesMut};
 use memmap2::{Advice, Mmap};
 use prost::Message;
 
@@ -110,19 +110,28 @@ impl SSTable {
 
         // Seek to the position of the index size and read the next 8 bytes
         reader.seek(SeekFrom::Start(blocks_size))?;
-        let mut index_size_bytes = [0u8; 8];
-        reader.read_exact(&mut index_size_bytes)?;
-        let index_size = u64::from_be_bytes(index_size_bytes);
+
+        let mut temp_buf = BytesMut::with_capacity(12);
+        temp_buf.resize(12, 0);
+
+        reader.read_exact(&mut temp_buf)?;
+        let expected_crc_index = temp_buf.get_u32();
+        let index_size = temp_buf.get_u64();
 
         // Seek to the start of the index and read the index data
-        let index_start = blocks_size + 8;
+        let index_start = blocks_size + 12;
         reader.seek(SeekFrom::Start(index_start))?;
 
-        let mut index_data = vec![0u8; index_size as usize];
-        reader.read_exact(&mut index_data)?;
+        temp_buf.clear();
+        temp_buf.resize(index_size as usize, 0);
+        reader.read_exact(&mut temp_buf)?;
 
-        let buf = Bytes::from(index_data);
-        let index = TableIndex::decode(buf)?;
+        let actual_crc_index = crc32fast::hash(&temp_buf);
+        if actual_crc_index != expected_crc_index {
+            return Err(CorruptedFileError)
+        }
+
+        let index = TableIndex::decode(temp_buf.freeze())?;
 
         let size_on_disk = reader.stream_position()?;
 
@@ -165,11 +174,11 @@ impl SSTable {
         let mut buf = Bytes::copy_from_slice(&self.mmap[index.offset as usize + Self::BLOCK_HEADER_SIZE..index.offset as usize + index.len as usize]);
 
         let actual_crc = crc32fast::hash(&buf);
-        
+
         if expected_crc != actual_crc {
             return Err(CorruptedFileError);
         }
-        
+
         let mut res: VecDeque<Entry> = VecDeque::new();
 
         while !buf.is_empty() {
@@ -386,13 +395,13 @@ pub(crate) mod tests {
     fn many_blocks_reopen() {
         test_many_blocks(true)
     }
-    
+
     #[test]
     fn corrupted_block() {
         let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), entry::META_ADD);
         let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), entry::META_ADD);
         let e3 = Entry::new(Bytes::from("3key"), Bytes::from("value3"), entry::META_ADD);
-        
+
         let tmp_dir = tempdir().unwrap();
         let wal_path = tmp_dir.path().join("1.wal");
         let sstable_path = tmp_dir.path().join("1.mem");
@@ -410,9 +419,9 @@ pub(crate) mod tests {
         let sstable = Builder::build_from_memtable(memtable, sstable_path.clone(), opts.clone(), 1).unwrap();
         assert_eq!(sstable.index.blocks.len(), 3);
         drop(sstable);
-        
+
         corrupt_byte(sstable_path.clone(), 5);
-        
+
         let err = SSTable::open(sstable_path, opts, 1).err().unwrap();
         match err {
             CorruptedFileError => {}

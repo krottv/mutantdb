@@ -126,6 +126,7 @@ impl Builder {
         if self.block_index.len > SSTable::BLOCK_HEADER_SIZE as u32 {
             self.table_index.blocks.push(self.block_index);
 
+            // todo: remove code duplicate with write_buf(&mut self)
             let crc = crc32fast::hash(&self.block_buf);
             self.crc_buf.put_u32(crc);
 
@@ -139,15 +140,16 @@ impl Builder {
         self.table_index.key_count = self.counter;
         self.table_index.max_version = self.max_version;
         let index_size = self.table_index.encoded_len();
-
-        let all_blocks_size = self.writer.stream_position()?;
-        self.writer.write(&index_size.to_be_bytes())?;
-
+        
         self.block_buf.reserve(index_size);
         self.table_index.encode(&mut self.block_buf)?;
-        self.writer.write(&self.block_buf)?;
+        let crc = crc32fast::hash(&self.block_buf);
+        self.crc_buf.put_u32(crc);
 
-        // size of entries is at the end
+        let all_blocks_size = self.writer.stream_position()?;
+        self.writer.write(&self.crc_buf)?;
+        self.writer.write(&(index_size as u64).to_be_bytes())?;
+        self.writer.write(&self.block_buf)?;
         self.writer.write(&all_blocks_size.to_be_bytes())?;
         self.writer.flush()?;
 
