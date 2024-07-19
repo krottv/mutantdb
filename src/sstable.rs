@@ -15,7 +15,7 @@ use proto::meta::{BlockIndex, TableIndex};
 
 use crate::db_options::DbOptions;
 use crate::entry::Entry;
-use crate::errors::Error::CorruptedFileError;
+use crate::errors::Error::{CorruptedFileError, ReadInvalidRange};
 use crate::errors::Result;
 use crate::util::no_fail;
 
@@ -100,6 +100,11 @@ impl SSTable {
     pub fn open(file_path: PathBuf, opts: Arc<DbOptions>, id: usize) -> Result<SSTable> {
         let file = File::open(&file_path)?;
         let file_size = file.metadata()?.len();
+        
+        if file_size < 20 {
+            return Err(ReadInvalidRange(format!("file is too small {}", file_size)));
+        }
+        
         let mut reader = BufReader::new(file);
 
         // Read the last 8 bytes from footer
@@ -107,6 +112,11 @@ impl SSTable {
         let mut blocks_size_bytes = [0u8; 8];
         reader.read_exact(&mut blocks_size_bytes)?;
         let blocks_size = u64::from_be_bytes(blocks_size_bytes);
+
+        // Check if blocks_size is within valid range
+        if blocks_size >= file_size - 8 {
+            return Err(ReadInvalidRange(format!("blocks_size {} is out of range", blocks_size)));
+        }
 
         // Seek to the position of the index size and read the next 8 bytes
         reader.seek(SeekFrom::Start(blocks_size))?;
@@ -117,6 +127,11 @@ impl SSTable {
         reader.read_exact(&mut temp_buf)?;
         let expected_crc_index = temp_buf.get_u32();
         let index_size = temp_buf.get_u64();
+        
+        // Check if index_size is within valid range
+        if index_size == 0 || blocks_size + 12 + index_size > file_size {
+            return Err(ReadInvalidRange(format!("index_size {} is out of range", index_size)));
+        }
 
         // Seek to the start of the index and read the index data
         let index_start = blocks_size + 12;
@@ -421,6 +436,41 @@ pub(crate) mod tests {
         drop(sstable);
 
         corrupt_byte(sstable_path.clone(), 5);
+
+        let err = SSTable::open(sstable_path, opts, 1).err().unwrap();
+        match err {
+            CorruptedFileError => {}
+            _ => {
+                panic!("wrong error")
+            }
+        }
+    }
+
+    #[test]
+    fn corrupted_index() {
+        let e1 = Entry::new(Bytes::from("1key"), Bytes::from("value1"), entry::META_ADD);
+        let e2 = Entry::new(Bytes::from("2key"), Bytes::from("value2"), entry::META_ADD);
+        let e3 = Entry::new(Bytes::from("3key"), Bytes::from("value3"), entry::META_ADD);
+
+        let tmp_dir = tempdir().unwrap();
+        let wal_path = tmp_dir.path().join("1.wal");
+        let sstable_path = tmp_dir.path().join("1.mem");
+        let opts = Arc::new(DbOptions {
+            max_wal_size: 1000,
+            block_max_size: 1000,
+            ..Default::default()
+        });
+
+        let memtable = Arc::new(Memtable::new(1, wal_path, opts.clone()).unwrap());
+        memtable.add(e1.clone()).unwrap();
+        memtable.add(e2.clone()).unwrap();
+        memtable.add(e3.clone()).unwrap();
+
+        let sstable = Builder::build_from_memtable(memtable, sstable_path.clone(), opts.clone(), 1).unwrap();
+        assert_eq!(sstable.index.blocks.len(), 1);
+        drop(sstable);
+
+        corrupt_byte(sstable_path.clone(), 99);
 
         let err = SSTable::open(sstable_path, opts, 1).err().unwrap();
         match err {
