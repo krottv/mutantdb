@@ -1,15 +1,16 @@
-use std::{fs};
+use std::fs;
 use std::fs::{File, OpenOptions};
 use std::mem::ManuallyDrop;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use bytes::{BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use memmap2::{Advice, MmapMut};
 
-use crate::entry::{Entry, ZERO_ENTRY_SIZE};
 use crate::db_options::DbOptions;
-use crate::errors::Result;
+use crate::entry::{Entry, ZERO_ENTRY_SIZE};
+use crate::errors::Error::{AbsentKey, CorruptedFileError};
+use crate::errors::{Error, Result};
 use crate::util::no_fail;
 
 pub struct Wal {
@@ -18,11 +19,11 @@ pub struct Wal {
     path: PathBuf,
     file: File,
     // in bytes
-    pub write_at: u64,
+    pub write_at: usize,
     // in bytes
-    len: u64,
+    len: usize,
     entry_buf: BytesMut,
-    delete_on_close: AtomicBool
+    delete_on_close: AtomicBool,
 }
 
 impl Wal {
@@ -34,21 +35,21 @@ impl Wal {
             .open(&path)?;
 
         let len = opts.max_wal_size;
-        let original_len = file.metadata()?.len();
+        let original_len = file.metadata()?.len() as usize;
 
-        // if don't take max, then changing wal options can remove some data,
+        // if max hasn't taken, then changing wal options can remove some data,
         // which is bad.
         let new_len = std::cmp::max(len, original_len);
 
         if new_len != original_len {
-            file.set_len(new_len)?;
+            file.set_len(new_len as u64)?;
             file.sync_all()?;
         }
 
         unsafe {
             let mmap = ManuallyDrop::new(MmapMut::map_mut(&file)?);
             mmap.advise(Advice::Sequential)?;
-            
+
             return Ok(
                 Wal {
                     mmap,
@@ -57,7 +58,7 @@ impl Wal {
                     write_at: 0,
                     len: new_len,
                     entry_buf: BytesMut::new(),
-                    delete_on_close: AtomicBool::new(false)
+                    delete_on_close: AtomicBool::new(false),
                 }
             );
         }
@@ -66,7 +67,7 @@ impl Wal {
     // only for case when single entry is bigger then the limit
     pub fn ensure_len(&mut self, entry: &Entry) -> Result<()> {
         let entry_size_bytes = entry.get_encoded_size_entry();
-        let size_required = entry_size_bytes as u64 + self.write_at;
+        let size_required = entry_size_bytes + self.write_at + Self::HEADER_LEN;
         if size_required >= self.len {
             self.set_len(size_required)?;
         }
@@ -78,29 +79,80 @@ impl Wal {
     The clone_from_slice operation is a single,
     optimized memory copy operation, which can be more efficient than a loop.
      */
-    pub fn add(&mut self, entry: &Entry) -> Result<()> {
+    pub fn add(&mut self, entry: &Entry) -> Result<usize> {
         self.ensure_len(entry)?;
-        
+
+        let entry_size = entry.get_encoded_size_entry();
         self.entry_buf.clear();
-        self.entry_buf.reserve(entry.get_encoded_size_entry());
+        self.entry_buf.reserve(entry_size);
         entry.encode_entry(&mut self.entry_buf);
 
-        self.mmap[self.write_at as usize..self.write_at as usize + self.entry_buf.len()]
-            .clone_from_slice(&self.entry_buf);
+        let crc = crc32fast::hash(&self.entry_buf);
+        let mut buf_header = BytesMut::with_capacity(Self::HEADER_LEN);
 
-        self.write_at += self.entry_buf.len() as u64;
-        
+        buf_header.put_u32(crc);
+        buf_header.put_u32(self.entry_buf.len() as u32);
+
+        self.mmap[self.write_at..self.write_at + Self::HEADER_LEN]
+            .clone_from_slice(&buf_header);
+        self.write_at += Self::HEADER_LEN;
+
+        self.mmap[self.write_at..self.write_at + self.entry_buf.len()]
+            .clone_from_slice(&self.entry_buf);
+        self.write_at += self.entry_buf.len();
+
+        let len = self.entry_buf.len() + buf_header.len();
+
         self.zero_next_entry()?;
 
-        return Ok(());
+        return Ok(len);
     }
 
-    fn set_len(&mut self, new_len: u64) -> Result<()> {
+    /**
+    Wal has its own header of 8 bytes.
+    checksum + size in bytes
+     */
+    const HEADER_LEN: usize = 8;
+
+
+    pub fn read_entry(&self, mut offset: usize) -> Result<(Entry, usize)> {
+        let mut buf_header = BytesMut::with_capacity(Self::HEADER_LEN);
+        buf_header.resize(Self::HEADER_LEN, 0);
+        if self.mmap.len() - offset < Self::HEADER_LEN {
+            return Err(AbsentKey);
+        }
+        Entry::check_range_mmap(&self.mmap, offset, Self::HEADER_LEN)?;
+        buf_header.clone_from_slice(&self.mmap[offset..offset + Self::HEADER_LEN]);
+
+        let crc = buf_header.get_u32();
+        let entry_size = buf_header.get_u32();
+
+        if crc == 0 || entry_size == 0 {
+            return Err(AbsentKey);
+        }
+
+        offset += Self::HEADER_LEN;
+
+        let mut buf_entry = BytesMut::with_capacity(entry_size as usize);
+        buf_entry.resize(entry_size as usize, 0);
+        Entry::check_range_mmap(&self.mmap, offset, entry_size as usize)?;
+        buf_entry.copy_from_slice(&self.mmap[offset..offset + entry_size as usize]);
+
+        let actual_crc = crc32fast::hash(&buf_entry);
+
+        if crc != actual_crc {
+            return Err(CorruptedFileError);
+        }
+
+        return Ok((Entry::decode(&mut buf_entry.freeze())?, entry_size as usize + Self::HEADER_LEN));
+    }
+
+    fn set_len(&mut self, new_len: usize) -> Result<()> {
         if self.len > new_len {
             panic!("provided len is smaller then before");
         } else if self.len < new_len {
             self.len = new_len;
-            self.file.set_len(new_len)?;
+            self.file.set_len(new_len as u64)?;
             self.file.sync_all()?;
             unsafe {
                 // reopen to reflect changed length.
@@ -117,27 +169,26 @@ impl Wal {
     // because in this case if we fill that empty gap, the next opening of wal,
     // will attempt to read next entries also, which creates inconsistent situation.
     pub fn zero_next_entry(&mut self) -> Result<()> {
-        
-        if self.write_at + ZERO_ENTRY_SIZE as u64 <= self.len {
+        if self.write_at + ZERO_ENTRY_SIZE <= self.len {
             let range =
-                &mut self.mmap[self.write_at as usize..self.write_at as usize + ZERO_ENTRY_SIZE];
-            
+                &mut self.mmap[self.write_at..self.write_at + ZERO_ENTRY_SIZE];
+
             unsafe {
                 std::ptr::write_bytes(range.as_mut_ptr(), 0, range.len());
             }
         }
-       
+
         Ok(())
     }
-    
+
     pub fn truncate(&mut self) -> Result<()> {
         self.flush()?;
         if self.write_at < self.len {
-            self.file.set_len(self.write_at)?;
+            self.file.set_len(self.write_at as u64)?;
             self.file.sync_all()?;
             self.len = self.write_at;
         }
-        
+
         return Ok(());
     }
 
@@ -147,9 +198,9 @@ impl Wal {
     }
 
     pub fn mark_delete(&self) {
-        self.delete_on_close.store(true, Ordering::Relaxed);   
+        self.delete_on_close.store(true, Ordering::Relaxed);
     }
-    
+
     pub fn drop_no_fail(&mut self) -> Result<()> {
         unsafe {
             ManuallyDrop::drop(&mut self.mmap);
@@ -157,10 +208,10 @@ impl Wal {
         if self.delete_on_close.load(Ordering::Relaxed) {
             fs::remove_file(&self.path)?;
         }
-        
+
         Ok(())
     }
-    
+
     pub fn create_path(id: usize) -> String {
         return format!("{}{}", id, WAL_FILE_EXT);
     }
@@ -176,8 +227,9 @@ impl Drop for Wal {
 
 pub struct WalIterator<'a> {
     wal: &'a Wal,
-    index_bytes: u64,
-    pub restore_write_at: Option<u64>
+    index_bytes: usize,
+    pub restore_write_at: Option<usize>,
+    is_valid: bool,
 }
 
 impl<'a> WalIterator<'a> {
@@ -185,8 +237,13 @@ impl<'a> WalIterator<'a> {
         WalIterator {
             wal,
             index_bytes: 0,
-            restore_write_at: None
+            restore_write_at: None,
+            is_valid: true,
         }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        return self.is_valid;
     }
 }
 
@@ -197,16 +254,26 @@ impl<'a> Iterator for &mut WalIterator<'a> {
         return if self.index_bytes >= self.wal.len {
             None
         } else {
-            let item = Entry::read_mmap(self.index_bytes, &self.wal.mmap);
+            let item_res = self.wal.read_entry(self.index_bytes);
 
-            // might not be the best place. Do we need it in all cases of iteration?
-            if item.is_absent() {
-                // restore write position
-                self.restore_write_at = Some(self.index_bytes);
-                None
-            } else {
-                self.index_bytes += item.get_encoded_size_entry() as u64;
+            if let Ok((item, len)) = item_res {
+                self.index_bytes += len;
                 Some(item)
+            } else {
+                let err = item_res.err().unwrap()
+                match err {
+                    AbsentKey => {
+                        // restore write position
+                        self.restore_write_at = Some(self.index_bytes);
+                        None
+                    }
+
+                    _ => {
+                        self.is_valid = false;
+                        log::log!(log::Level::Warn, "can't restore wal entry. {}", err);
+                        None
+                    }
+                }
             }
         };
     }
@@ -214,12 +281,16 @@ impl<'a> Iterator for &mut WalIterator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use tempfile::tempdir;
-    use crate::entry;
+    use std::fs::OpenOptions;
+    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::path::PathBuf;
 
-    use crate::entry::{Entry, ValObj};
+    use bytes::{Bytes, BytesMut};
+    use tempfile::{tempdir, TempDir};
+
     use crate::db_options::DbOptions;
+    use crate::entry;
+    use crate::entry::{Entry, ValObj};
     use crate::wal::{Wal, WalIterator};
 
     #[test]
@@ -231,21 +302,20 @@ mod tests {
             val_obj: ValObj {
                 value: Bytes::from("value3"),
                 meta: 10,
-                user_meta: 15,
                 version: 1000,
             },
         };
         let tmp_dir = tempdir().unwrap();
         let wal_path = tmp_dir.path().join("1.wal");
-        let encoded_size = e1.get_encoded_size_entry() as u64
-            + e2.get_encoded_size_entry() as u64
-            + e3.get_encoded_size_entry() as u64;
+        let encoded_size = e1.get_encoded_size_entry()
+            + e2.get_encoded_size_entry()
+            + e3.get_encoded_size_entry();
 
         let opts = DbOptions {
             max_wal_size: encoded_size,
             ..Default::default()
         };
-        
+
         let mut wal = Wal::open(wal_path, &opts).unwrap();
 
         wal.add(&e1).unwrap();
@@ -257,8 +327,7 @@ mod tests {
         assert_eq!(iter.next(), Some(e2));
         assert_eq!(iter.next(), Some(e3));
         assert_eq!(iter.next(), None);
-        assert_eq!(iter.next(), None);
-        assert_eq!(iter.next(), None);
+        assert!(iter.is_valid());
     }
 
     #[test]
@@ -270,7 +339,6 @@ mod tests {
             val_obj: ValObj {
                 value: Bytes::from("value3"),
                 meta: 10,
-                user_meta: 15,
                 version: 1000,
             },
         };
@@ -278,10 +346,10 @@ mod tests {
         let tmp_dir = tempdir().unwrap();
         let wal_path = tmp_dir.path().join("2.wal");
 
-        let encoded_size = e1.get_encoded_size_entry() as u64
-            + e2.get_encoded_size_entry() as u64
-            + e3.get_encoded_size_entry() as u64;
-        
+        let encoded_size = e1.get_encoded_size_entry()
+            + e2.get_encoded_size_entry()
+            + e3.get_encoded_size_entry() + Wal::HEADER_LEN * 3;
+
         let opts1 = DbOptions {
             max_wal_size: 10000,
             ..Default::default()
@@ -293,10 +361,10 @@ mod tests {
 
         wal.truncate().unwrap();
 
-        assert_eq!(wal.file.metadata().unwrap().len(), encoded_size);
+        assert_eq!(wal.file.metadata().unwrap().len(), encoded_size as u64);
 
         drop(wal);
-        
+
         // small size, but file shouldn't be trimmed
         let opts2 = DbOptions {
             max_wal_size: 1,
@@ -309,7 +377,86 @@ mod tests {
         assert_eq!(iter.next(), Some(e2));
         assert_eq!(iter.next(), Some(e3));
         assert_eq!(iter.next(), None);
-        assert_eq!(iter.next(), None);
-        assert_eq!(iter.next(), None);
+        assert!(iter.is_valid());
+    }
+
+    fn create_corrupted_wal(dir: &TempDir, content: &[u8], truncate_bytes: usize) -> std::io::Result<PathBuf> {
+        let file_path = dir.path().join("corrupted.wal");
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&file_path)?;
+        file.write_all(&content[..content.len() - truncate_bytes])?;
+        file.sync_all()?;
+        Ok(file_path)
+    }
+
+    #[test]
+    fn test_read_corrupted_wal() {
+        let temp_dir = tempdir().unwrap();
+
+        let garbage = b"asduejfbsoeufejakjfndaskjfnidakdasojdoasjdoasjdoia";
+        // Create a corrupted WAL file by truncating the encoded data
+        let path = create_corrupted_wal(&temp_dir, garbage, 10).unwrap();
+
+        // Attempt to read the corrupted WAL file
+        let wal = Wal::open(path, &DbOptions::default()).unwrap();
+        let mut iter = WalIterator::new(&wal);
+
+        // Collect entries and ensure no errors are produced
+        let entries: Vec<_> = iter.collect();
+        assert!(entries.is_empty());
+        assert!(!iter.is_valid());
+    }
+
+    #[test]
+    fn test_read_corrupted_wal_wrong_encoding() {
+        let tmp_dir = tempdir().unwrap();
+        let wal_path = tmp_dir.path().join("some.wal");
+
+        let e1 = Entry::new(Bytes::from("key1"), Bytes::from("value1"), entry::META_ADD);
+
+        let opts1 = DbOptions {
+            max_wal_size: 10000,
+            ..Default::default()
+        };
+        let mut wal = Wal::open(wal_path.clone(), &opts1).unwrap();
+        let _len1 = wal.add(&e1).unwrap();
+        wal.truncate().unwrap();
+        drop(wal);
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(false)
+            .open(wal_path.clone())
+            .unwrap();
+
+        let file_size = file.metadata().unwrap().len() as usize;
+
+        // Initialize a BytesMut buffer with the file size
+        let mut buffer = BytesMut::with_capacity(file_size);
+        buffer.resize(file_size, 0);
+
+        // Read the file contents into the buffer
+        file.read_exact(&mut buffer).unwrap();
+
+        // corrupt record, enough to change crc
+        buffer[9] = buffer[9].saturating_add(1);
+
+        // Ensure the file write position is at the beginning
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(&buffer).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        // Attempt to read the corrupted WAL file
+        let wal = Wal::open(wal_path, &DbOptions::default()).unwrap();
+        let mut iter = WalIterator::new(&wal);
+
+        // Collect entries and ensure no errors are produced
+        let entries: Vec<_> = iter.collect();
+        assert!(!iter.is_valid());
+        assert!(entries.is_empty()); // Expecting zero entries due to corruption
     }
 }

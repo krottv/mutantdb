@@ -10,7 +10,8 @@ use crate::errors::Result;
 
 pub struct DbOptions {
     // in bytes. actual size can exceed this if single entry is bigger
-    pub max_wal_size: u64,
+    // usize because mmap supports only usize, whereas file can be u64
+    pub max_wal_size: usize,
     // in bytes. actual size can exceed this if single entry is bigger
     pub max_memtable_size: u64,
     // since we have one table it is fine

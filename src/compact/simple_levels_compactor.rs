@@ -160,7 +160,6 @@ pub mod tests {
             val_obj: ValObj {
                 value: Bytes::from(value.to_be_bytes().to_vec()),
                 meta: META_ADD,
-                user_meta: key as u8,
                 version: value as u64,
             },
         }

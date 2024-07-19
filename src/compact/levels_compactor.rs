@@ -78,12 +78,6 @@ pub struct CompactDef {
     to_tables: Vec<Arc<SSTable>>,
 }
 
-impl CompactDef {
-    fn is_async(&self) -> bool {
-        !self.to_tables.is_empty()
-    }
-}
-
 pub struct CompactRes {
     changes: Vec<ManifestChange>,
 }

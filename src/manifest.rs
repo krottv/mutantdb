@@ -39,7 +39,7 @@ impl Manifest {
 
         let mut buf_header = BytesMut::with_capacity(4); // Create an empty vector as the buffer
         buf_header.resize(4, 0);
-        let read_res = file.read_exact(&mut buf_header); // Read the entire file into the buffer
+        let read_res = file.read_exact(&mut buf_header); 
         if let Err(error) = &read_res {
             if error.kind() == ErrorKind::UnexpectedEof {
                 return Ok((Manifest::default(), 0));

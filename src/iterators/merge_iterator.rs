@@ -21,6 +21,11 @@ pub struct MergeIterator<Item> {
 }
 
 // todo: ugly that we cannot pass lambda to BinaryHeap, now we got overhead of tons of reference counters
+// maybe use unsafe pointers, because we are confident about the lifecycle of comparator. 
+// It will outlive mergeIterator for sure.
+// don't try binary_heap_plus, as it receives comparator func as generic 
+// the type will be the following let mut heap: BinaryHeap<HeapElem<Item>, FnComparator<fn(&HeapElem<Item>, &HeapElem<Item>)
+// and it won't be possible to store the heap anywhere because we have move closure and not a functional parameter.
 struct HeapElem<T> {
     entry: T,
     comparator: Arc<dyn KeyComparator<T>>,
@@ -177,7 +182,6 @@ mod tests {
             val_obj: ValObj {
                 value: Bytes::from(value.to_string()),
                 meta: META_ADD,
-                user_meta: key,
                 version: value as u64,
             },
         }

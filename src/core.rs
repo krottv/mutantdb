@@ -96,11 +96,10 @@ impl Mutant {
         }
     }
 
-    pub fn add(&self, key: Key, value: Bytes, user_meta: u8) -> Result<()> {
+    pub fn add(&self, key: Key, value: Bytes) -> Result<()> {
         let val_obj = ValObj {
             value,
             meta: META_ADD,
-            user_meta,
             version: 0,
         };
 
@@ -111,7 +110,6 @@ impl Mutant {
         let val_obj = ValObj {
             value: Bytes::new(),
             meta: META_DELETE,
-            user_meta: 0,
             version: 0,
         };
 
@@ -266,11 +264,11 @@ pub mod tests {
         let core = Mutant::open(db_opts, true).unwrap();
 
         for i in 1..100 {
-            core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
+            core.add(int_to_bytes(i), int_to_bytes(i)).unwrap();
         }
 
         for i in 50..100 {
-            core.add(int_to_bytes(i), int_to_bytes(i * 10), 0).unwrap();
+            core.add(int_to_bytes(i), int_to_bytes(i * 10)).unwrap();
         }
 
         core.await_pending_compaction();
@@ -309,11 +307,11 @@ pub mod tests {
         let core = Mutant::open(db_opts, false).unwrap();
 
         for i in 1..100 {
-            core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
+            core.add(int_to_bytes(i), int_to_bytes(i)).unwrap();
         }
 
         for i in 50..100 {
-            core.add(int_to_bytes(i), int_to_bytes(i * 10), 0).unwrap();
+            core.add(int_to_bytes(i), int_to_bytes(i * 10)).unwrap();
         }
 
         let memtables_count = core.inner.memtables.read().unwrap().count();
@@ -377,11 +375,11 @@ pub mod tests {
         let core = Mutant::open(db_opts, false).unwrap();
 
         for i in 1..100 {
-            core.add(int_to_bytes(i), int_to_bytes(i), 0).unwrap();
+            core.add(int_to_bytes(i), int_to_bytes(i)).unwrap();
         }
 
         for i in 50..100 {
-            core.add(int_to_bytes(i), int_to_bytes(i * 10), 0).unwrap();
+            core.add(int_to_bytes(i), int_to_bytes(i * 10)).unwrap();
         }
 
         let memtables_count = core.inner.memtables.read().unwrap().count();

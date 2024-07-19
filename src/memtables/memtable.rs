@@ -103,7 +103,7 @@ impl Memtable {
     pub fn add(&self, entry: Entry) -> crate::errors::Result<()> {
         {
             self.wal.write().unwrap()
-                .add(&entry)?
+                .add(&entry)?;
         }
         {
             self.inner.write().unwrap()

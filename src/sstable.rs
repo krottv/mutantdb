@@ -139,10 +139,10 @@ impl SSTable {
         }
 
         // unwrap because size is guaranteed to be non 0
-        let mut first_block = self.get_block(self.index.blocks.get(0).unwrap());
+        let mut first_block = self.get_block(self.index.blocks.first().unwrap());
         self.first_key = first_block.entries.pop_front().unwrap().key;
 
-        let mut last_block = self.get_block(self.index.blocks.get(self.index.blocks.len() - 1).unwrap());
+        let mut last_block = self.get_block(self.index.blocks.last().unwrap());
         self.last_key = last_block.entries.pop_back().unwrap().key;
     }
     
@@ -211,7 +211,8 @@ impl SSTable {
         let mut res: VecDeque<Entry> = VecDeque::new();
 
         while !buf.is_empty() {
-            let entry = Entry::decode(&mut buf);
+            // todo: propagate error as result. block might be corrupted.
+            let entry = Entry::decode(&mut buf).unwrap();
             res.push_back(entry);
         }
 
@@ -331,7 +332,6 @@ pub(crate) mod tests {
             val_obj: ValObj {
                 value: Bytes::from("value3"),
                 meta: 10,
-                user_meta: 15,
                 version: 1000,
             },
         };
@@ -390,7 +390,6 @@ pub(crate) mod tests {
             val_obj: ValObj {
                 value: Bytes::from("value3"),
                 meta: 10,
-                user_meta: 15,
                 version: 1000,
             },
         };

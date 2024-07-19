@@ -90,7 +90,7 @@ impl Memtables {
         let wal = self.mutable.wal.read().unwrap();
         let inner = self.mutable.inner.read().unwrap();
         
-        let remaining_wal_space = self.opts.max_wal_size <= (wal.write_at + entry_size_bytes as u64);
+        let remaining_wal_space = self.opts.max_wal_size <= (wal.write_at + entry_size_bytes);
         let remaining_skiplist_size = self.opts.max_memtable_size <= (&inner.cur_size.load(Ordering::Relaxed) + entry_size_bytes as u64);
         return inner.skiplist.size > 0 && (remaining_wal_space || remaining_skiplist_size)
     }

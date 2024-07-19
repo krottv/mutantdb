@@ -11,10 +11,10 @@ pub enum Error {
     // arc is necessary, so that error class is cloneable.
     Io(Arc<io::Error>),
 
-    #[error("encode error")]
+    #[error("protobuf encode error")]
     EncodeError(EncodeError),
     
-    #[error("decode error")]
+    #[error("protobuf decode error")]
     DecodeError(DecodeError),
     
     #[error("unknown error")]
@@ -23,8 +23,11 @@ pub enum Error {
     #[error("absent key")]
     AbsentKey,
 
-    #[error("illegal state {0}")]
-    IllegalState(String),
+    #[error("read invalid range {0}")]
+    ReadInvalidRange(String),
+
+    #[error("corrupted file because of crc verification failed")]
+    CorruptedFileError,
     
     #[error("Expected version {0}")]
     ManifestFormatVersionErr(u32)
