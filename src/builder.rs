@@ -5,7 +5,7 @@ use std::mem;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use prost::Message;
 
 use proto::meta::{BlockIndex, TableIndex};
@@ -20,10 +20,11 @@ pub struct Builder {
     opts: Arc<DbOptions>,
     counter: u64,
     writer: BufWriter<File>,
-    index: TableIndex,
-    block: BlockIndex,
+    table_index: TableIndex,
+    block_index: BlockIndex,
+    crc_buf: BytesMut,
     block_offset: u64,
-    buffer: BytesMut,
+    block_buf: BytesMut,
     max_block_size: usize,
     file_path: PathBuf,
     max_version: u64,
@@ -52,10 +53,11 @@ impl Builder {
             opts,
             counter: 0,
             writer,
-            index,
-            block: BlockIndex::default(),
+            table_index: index,
+            block_index: BlockIndex::default(),
+            crc_buf: BytesMut::with_capacity(SSTable::BLOCK_HEADER_SIZE as usize),
             block_offset: 0,
-            buffer,
+            block_buf: buffer,
             max_block_size,
             file_path,
             max_version: 0,
@@ -67,8 +69,9 @@ impl Builder {
 
     pub fn add_entry(&mut self, key: &Bytes, val_obj: &ValObj) -> Result<()> {
         if self.counter == 0 {
-            self.block.key = key.clone();
-            self.block.offset = self.block_offset;
+            self.block_index.key = key.clone();
+            self.block_index.offset = self.block_offset;
+            self.block_index.len += SSTable::BLOCK_HEADER_SIZE as u32;
 
             self.first_key = key.clone();
         } else {
@@ -80,57 +83,78 @@ impl Builder {
             }
         }
         self.last_key = key.clone();
+        let entry_size = Entry::get_encoded_size(key, val_obj);
+        
+        // add block to index
+        if self.block_index.len > SSTable::BLOCK_HEADER_SIZE as u32 && (self.block_index.len as usize + entry_size) > self.max_block_size {
+            self.block_offset += self.block_index.len as u64;
+
+            let old_val = mem::take(&mut self.block_index);
+            self.table_index.blocks.push(old_val);
+            
+            self.block_index.len += SSTable::BLOCK_HEADER_SIZE as u32;
+            self.block_index.offset = self.block_offset;
+            self.block_index.key = key.clone();
+            
+            self.write_buf()?;
+        }
 
         // write entry
-        let ensure_size = Entry::get_encoded_size(key, val_obj);
-        if ensure_size > self.buffer.capacity() {
-            self.buffer.reserve(ensure_size - self.buffer.capacity())
-        }
-        Entry::encode(key, val_obj, &mut self.buffer);
-        let encoded_size = self.writer.write(&self.buffer)?;
-        self.buffer.clear();
-
-        // add block to index
-        if self.block.len != 0 && (self.block.len as usize + encoded_size) > self.max_block_size {
-            self.block_offset += self.block.len as u64;
-
-            let old_val = mem::take(&mut self.block);
-            self.index.blocks.push(old_val);
-
-            self.block.offset = self.block_offset;
-            self.block.key = key.clone();
-        }
-        self.block.len += encoded_size as u32;
+        self.block_buf.reserve(entry_size);
+        Entry::encode(key, val_obj, &mut self.block_buf);
+        self.block_index.len += entry_size as u32;
 
         self.counter += 1;
         self.max_version = max(self.max_version, val_obj.version);
         return Ok(());
     }
+    
+    fn write_buf(&mut self) -> Result<()> {
+        let crc = crc32fast::hash(&self.block_buf);
+        self.crc_buf.put_u32(crc);
+
+        self.writer.write(&self.crc_buf)?;
+        self.writer.write(&self.block_buf)?;
+
+        self.crc_buf.clear();
+        self.block_buf.clear();
+        
+        Ok(())
+    }
 
     pub fn build(mut self) -> Result<SSTable> {
-        if self.block.len != 0 {
-            self.index.blocks.push(self.block);
+        if self.block_index.len > SSTable::BLOCK_HEADER_SIZE as u32 {
+            self.table_index.blocks.push(self.block_index);
+
+            let crc = crc32fast::hash(&self.block_buf);
+            self.crc_buf.put_u32(crc);
+
+            self.writer.write(&self.crc_buf)?;
+            self.writer.write(&self.block_buf)?;
+
+            self.crc_buf.clear();
+            self.block_buf.clear();
         }
 
-        self.index.key_count = self.counter;
-        self.index.max_version = self.max_version;
-        let index_size = self.index.encoded_len();
+        self.table_index.key_count = self.counter;
+        self.table_index.max_version = self.max_version;
+        let index_size = self.table_index.encoded_len();
 
-        let all_entries_size = self.writer.stream_position()?;
+        let all_blocks_size = self.writer.stream_position()?;
         self.writer.write(&index_size.to_be_bytes())?;
 
-        self.buffer.reserve(index_size);
-        self.index.encode(&mut self.buffer)?;
-        self.writer.write(&self.buffer)?;
+        self.block_buf.reserve(index_size);
+        self.table_index.encode(&mut self.block_buf)?;
+        self.writer.write(&self.block_buf)?;
 
         // size of entries is at the end
-        self.writer.write(&all_entries_size.to_be_bytes())?;
+        self.writer.write(&all_blocks_size.to_be_bytes())?;
         self.writer.flush()?;
 
         let size_on_disk = self.writer.stream_position()?;
 
-        let mut sstable = SSTable::from_builder(self.index, self.file_path, self.opts.clone(),
-                                     size_on_disk, self.sstable_id)?;
+        let mut sstable = SSTable::from_builder(self.table_index, self.file_path, self.opts.clone(),
+                                                size_on_disk, self.sstable_id)?;
         sstable.first_key = self.first_key;
         sstable.last_key = self.last_key;
         

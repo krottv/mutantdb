@@ -10,7 +10,7 @@ use memmap2::{Advice, MmapMut};
 use crate::db_options::DbOptions;
 use crate::entry::{Entry, ZERO_ENTRY_SIZE};
 use crate::errors::Error::{AbsentKey, CorruptedFileError};
-use crate::errors::{Error, Result};
+use crate::errors::{Result};
 use crate::util::no_fail;
 
 pub struct Wal {
@@ -121,7 +121,7 @@ impl Wal {
         if self.mmap.len() - offset < Self::HEADER_LEN {
             return Err(AbsentKey);
         }
-        Entry::check_range_mmap(&self.mmap, offset, Self::HEADER_LEN)?;
+        Entry::check_range_mmap(self.mmap.len(), offset, Self::HEADER_LEN)?;
         buf_header.clone_from_slice(&self.mmap[offset..offset + Self::HEADER_LEN]);
 
         let crc = buf_header.get_u32();
@@ -135,7 +135,7 @@ impl Wal {
 
         let mut buf_entry = BytesMut::with_capacity(entry_size as usize);
         buf_entry.resize(entry_size as usize, 0);
-        Entry::check_range_mmap(&self.mmap, offset, entry_size as usize)?;
+        Entry::check_range_mmap(self.mmap.len(), offset, entry_size as usize)?;
         buf_entry.copy_from_slice(&self.mmap[offset..offset + entry_size as usize]);
 
         let actual_crc = crc32fast::hash(&buf_entry);
@@ -260,7 +260,7 @@ impl<'a> Iterator for &mut WalIterator<'a> {
                 self.index_bytes += len;
                 Some(item)
             } else {
-                let err = item_res.err().unwrap()
+                let err = item_res.err().unwrap();
                 match err {
                     AbsentKey => {
                         // restore write position
@@ -280,7 +280,7 @@ impl<'a> Iterator for &mut WalIterator<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::fs::OpenOptions;
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::path::PathBuf;
@@ -380,8 +380,8 @@ mod tests {
         assert!(iter.is_valid());
     }
 
-    fn create_corrupted_wal(dir: &TempDir, content: &[u8], truncate_bytes: usize) -> std::io::Result<PathBuf> {
-        let file_path = dir.path().join("corrupted.wal");
+    pub fn create_corrupted_file(dir: &TempDir, content: &[u8], truncate_bytes: usize) -> std::io::Result<PathBuf> {
+        let file_path = dir.path().join("corrupted.fl");
         let mut file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -397,7 +397,7 @@ mod tests {
 
         let garbage = b"asduejfbsoeufejakjfndaskjfnidakdasojdoasjdoasjdoia";
         // Create a corrupted WAL file by truncating the encoded data
-        let path = create_corrupted_wal(&temp_dir, garbage, 10).unwrap();
+        let path = create_corrupted_file(&temp_dir, garbage, 10).unwrap();
 
         // Attempt to read the corrupted WAL file
         let wal = Wal::open(path, &DbOptions::default()).unwrap();
@@ -407,6 +407,32 @@ mod tests {
         let entries: Vec<_> = iter.collect();
         assert!(entries.is_empty());
         assert!(!iter.is_valid());
+    }
+    
+    pub fn corrupt_byte(path: PathBuf, byte_pos: usize) {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(false)
+            .open(path.clone())
+            .unwrap();
+
+        let file_size = file.metadata().unwrap().len() as usize;
+
+        // Initialize a BytesMut buffer with the file size
+        let mut buffer = BytesMut::with_capacity(file_size);
+        buffer.resize(file_size, 0);
+
+        // Read the file contents into the buffer
+        file.read_exact(&mut buffer).unwrap();
+
+        // corrupt record, enough to change crc
+        buffer[byte_pos] = buffer[byte_pos].saturating_add(1);
+
+        // Ensure the file write position is at the beginning
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(&buffer).unwrap();
+        file.sync_all().unwrap();
     }
 
     #[test]
@@ -425,30 +451,7 @@ mod tests {
         wal.truncate().unwrap();
         drop(wal);
 
-        let mut file = OpenOptions::new()
-            .write(true)
-            .read(true)
-            .create(false)
-            .open(wal_path.clone())
-            .unwrap();
-
-        let file_size = file.metadata().unwrap().len() as usize;
-
-        // Initialize a BytesMut buffer with the file size
-        let mut buffer = BytesMut::with_capacity(file_size);
-        buffer.resize(file_size, 0);
-
-        // Read the file contents into the buffer
-        file.read_exact(&mut buffer).unwrap();
-
-        // corrupt record, enough to change crc
-        buffer[9] = buffer[9].saturating_add(1);
-
-        // Ensure the file write position is at the beginning
-        file.seek(SeekFrom::Start(0)).unwrap();
-        file.write_all(&buffer).unwrap();
-        file.sync_all().unwrap();
-        drop(file);
+        corrupt_byte(wal_path.clone(), 9);
 
         // Attempt to read the corrupted WAL file
         let wal = Wal::open(wal_path, &DbOptions::default()).unwrap();

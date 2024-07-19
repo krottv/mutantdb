@@ -100,11 +100,11 @@ impl Entry {
         Self::encode(&self.key, &self.val_obj, buf)
     }
 
-    pub(crate) fn check_range_mmap(mmap: &MmapMut, offset: usize, required: usize) -> Result<()> {
-        if mmap.len() - offset < required {
+    pub(crate) fn check_range_mmap(mmap_len: usize, offset: usize, required: usize) -> Result<()> {
+        if mmap_len - offset < required {
             return Err(ReadInvalidRange(format!(
                 "invalid range expected len {}, actual len {}",
-                required, mmap.len() - offset
+                required, mmap_len - offset
             )));
         }
         Ok(())

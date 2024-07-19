@@ -2,7 +2,7 @@ pub mod concat_iterator;
 pub mod merge_iterator;
 pub mod sstable_iterator;
 pub mod memtable_iterator;
-
+pub mod block_iterator;
 /*
 #[enum_dispatch]
 pub trait AgateIterator {

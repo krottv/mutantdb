@@ -153,14 +153,14 @@ impl Level {
 
     fn get_val_l0(&self, key: &Key) -> Option<ValObj> {
         for sstable in self.run.iter() {
-            if let Some(entry) = sstable.find_entry(key) {
+            if let Some(entry) = SSTableIterator::new(sstable.clone()).find_entry(key) {
                 return Some(entry.val_obj);
             }
         }
         None
     }
 
-    fn get_sstable_of_sorted(&self, key: &Key, key_comparator: &dyn KeyComparator<Key>) -> Option<&SSTable> {
+    fn get_sstable_of_sorted(&self, key: &Key, key_comparator: &dyn KeyComparator<Key>) -> Option<Arc<SSTable>> {
         let bsearch_res = self.run.binary_search_by(|x| {
             let cmp_first = key_comparator.compare(&x.first_key, key);
             let cmp_last = key_comparator.compare(&x.last_key, key);
@@ -175,7 +175,7 @@ impl Level {
         });
 
         if let Ok(index_sstable) = bsearch_res {
-            Some(self.run.get(index_sstable).unwrap().as_ref())
+            Some(self.run.get(index_sstable).unwrap().clone())
         } else {
             None
         }
@@ -183,7 +183,7 @@ impl Level {
 
     fn get_val_lx(&self, key: &Key, key_comparator: &dyn KeyComparator<Key>) -> Option<ValObj> {
         if let Some(sstable) = self.get_sstable_of_sorted(key, key_comparator) {
-            if let Some(entry) = sstable.find_entry(key) {
+            if let Some(entry) = SSTableIterator::new(sstable.clone()).find_entry(key) {
                 return Some(entry.val_obj);
             }
         }
