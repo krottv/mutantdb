@@ -43,7 +43,7 @@ pub fn rand_add(
     let mut handles = vec![];
 
     for chunk_start in (0..key_nums).step_by(chunk_size as usize) {
-        let agate = core.clone();
+        let db = core.clone();
 
         handles.push(std::thread::spawn(move || {
             let mut rng = rand::thread_rng();
@@ -57,7 +57,7 @@ pub fn rand_add(
                     } else {
                         gen_kv_pair(rng.gen_range(0..key_nums), value_size)
                     };
-                    agate.add(key, value, 0).unwrap();
+                    db.add(key, value).unwrap();
                 });
             }
         }));

@@ -165,8 +165,8 @@ impl LevelsController {
             let tables_str = level.run.iter().map(|x| {
                 x.id.to_string()
             }).collect::<Vec<String>>().join(", ");
-
-            let level_str = format!("level id:{}, size:{}mb. tables [{}]\n", level.id, level.size_on_disk / 1024, tables_str);
+            let level_str = format!("level id:{}, size:{:.3}mb. tables [{}]\n", 
+                                    level.id, level.size_on_disk as f64 / 1024.0, tables_str);
             s.push_str(level_str.as_str());
         }
 

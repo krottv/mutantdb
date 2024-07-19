@@ -248,7 +248,6 @@ pub(crate) mod tests {
     use crate::db_options::DbOptions;
     use crate::entry;
     use crate::entry::{Entry, ValObj};
-    use crate::errors::Error;
     use crate::errors::Error::CorruptedFileError;
     use crate::iterators::sstable_iterator::SSTableIterator;
     use crate::memtables::memtable::Memtable;

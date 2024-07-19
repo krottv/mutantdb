@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use memmap2::MmapMut;
 
 use crate::comparator::KeyComparator;
 use crate::errors::Error::ReadInvalidRange;
