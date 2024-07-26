@@ -50,7 +50,7 @@ impl LevelPriority {
             panic!("wrong ids are provided")
         }
     }
-    
+
     fn filter_conflicting_priorities(priorities: &mut Vec<LevelPriority>) {
         let mut visited_levels: HashSet<usize> = HashSet::new();
 
@@ -149,9 +149,7 @@ impl LevelsCompactor {
         let mut futures = Vec::new();
 
         for x in compacts.into_iter() {
-            futures.push(Self::subcompact_async_single(self.controller.levels.clone(),
-                                                       self.controller.db_opts.clone(), 
-                                                       self.controller.id_generator.clone(), x))
+            futures.push(self.subcompact_async_single(x))
         }
 
         let results = self.runtime.block_on(futures::future::join_all(futures.into_iter()));
@@ -168,18 +166,18 @@ impl LevelsCompactor {
     }
 
 
-    async fn subcompact_async_single(levels_lock: Arc<RwLock<Vec<Level>>>,
-                                     db_opts: Arc<DbOptions>, id_generator: Arc<SSTableIdGenerator>,
-                                     compact_def: CompactDef) -> Result<CompactRes> {
+    async fn subcompact_async_single(&self, compact_def: CompactDef) -> Result<CompactRes> {
+        let db_opts = self.controller.db_opts.clone();
         let total_iter = Self::create_iterator_for_tables(db_opts.clone(),
                                                           &compact_def);
-        
-        let new_tables = LevelsController::create_sstables(db_opts.clone(), id_generator.clone(), total_iter)?;
-        
+
+        let new_tables = LevelsController::create_sstables(db_opts.clone(), self.controller.id_generator.clone(), total_iter)?;
+
         let temp_level = Level::new(compact_def.priority.to_level_id, &new_tables);
         temp_level.validate(db_opts.key_comparator.as_ref());
 
-        let changes = Self::change_levels_inner(levels_lock, db_opts, &compact_def, new_tables);
+        let changes = Self::change_levels_inner(self.controller.levels.clone(),
+                                                db_opts, &compact_def, new_tables);
 
         for sstable in &compact_def.from_tables {
             sstable.mark_delete()
@@ -231,7 +229,7 @@ impl LevelsCompactor {
         let highest_key_ref = &highest_key.last_key;
 
         let to_sstables = to_level.select_sstables(lowest_key_ref, highest_key_ref, self.controller.db_opts.clone());
-        
+
         from_level.validate(self.controller.db_opts.key_comparator.as_ref());
         to_level.validate(self.controller.db_opts.key_comparator.as_ref());
 
@@ -314,7 +312,7 @@ impl LevelsCompactor {
             id: priority.to_level_id,
             size_on_disk: 0,
         };
-        
+
         new_level_to.calc_size_on_disk();
         new_level_to.sort_tables(db_opts.key_comparator.as_ref());
         new_level_to.validate(db_opts.key_comparator.as_ref());
