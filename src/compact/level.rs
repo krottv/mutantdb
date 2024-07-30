@@ -66,12 +66,12 @@ impl Level {
 
             for (index, table) in self.run.iter().enumerate() {
                 if index != 0 && table.index.key_count > 1 && key_comparator.compare(&table.first_key, prev_right).is_le() {
-                    
+
                     let tables_str: Vec<String> = self.run.iter().map(|x| {
                         format!("first_key:{} last_key:{}", String::from_utf8(x.first_key.to_vec()).unwrap(),
                                 String::from_utf8(x.last_key.to_vec()).unwrap())
                     }).collect();
-                    
+
                     panic!("overlapping sstable keys on level {}, table_id {}, prev_id {}\ntables {}",
                            self.id, table.id, prev_id, tables_str.join(",,,,"))
                 } else {
@@ -79,7 +79,7 @@ impl Level {
                     prev_id = table.id
                 }
             }
-            
+
             // check order
             let iterators: Vec<SSTableIterator> = self.run.iter().map(|x| {
                 SSTableIterator::new(x.clone())
@@ -87,7 +87,7 @@ impl Level {
 
             let mut concat_iterator = ConcatIterator::new(iterators);
             if let Some(mut prev) = concat_iterator.next() {
-                
+
                 for entry in concat_iterator {
                     let comp = key_comparator.compare(&prev.key, &entry.key);
                     if comp.is_eq() {
@@ -341,7 +341,7 @@ pub mod tests {
         assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(25), &key_comparator).unwrap().id, 5);
         assert_eq!(level.get_sstable_of_sorted(&int_to_bytes(30), &key_comparator).unwrap().id, 5);
     }
-    
+
     #[test]
     fn sorted_tables_level0() {
         let key_comparator = BytesI32Comparator {};
@@ -361,7 +361,7 @@ pub mod tests {
         assert_eq!(level.run.get(3).unwrap().id, 4);
         assert_eq!(level.run.get(4).unwrap().id, 5);
     }
-    
+
     fn bsearch_range(ranges: &VecDeque<(i32, i32)>, target: i32) -> Result<usize, usize> {
         return ranges.binary_search_by(|x| {
             let (first, last) = x;
